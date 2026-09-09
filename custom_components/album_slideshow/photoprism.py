@@ -6,8 +6,9 @@ HTTP lives in ``PhotoprismClient``; the parsing/URL helpers are pure functions
 so they can be unit-tested without a live server or aiohttp.
 
 API shape (PhotoPrism ``/api/v1``, Bearer auth):
-- ``POST /api/v1/session`` ``{username, password}`` -> ``{access_token, ...}``
-    (only needed for the username + password auth method).
+- ``POST /api/v1/session`` ``{username, password}`` -> ``{access_token,
+    config: {previewToken, ...}, ...}`` (only needed for the username +
+    password auth method).
 - ``GET /api/v1/photos`` ``?count&offset&order=newest&primary=true`` plus a
     filter (``s=<album_uid>``, ``q=subject:<uid>``, ``q=favorite:true``, or a
     custom ``q=``) -> a JSON list of photos. Metadata is inline (``TakenAt``,
@@ -23,6 +24,7 @@ API shape (PhotoPrism ``/api/v1``, Bearer auth):
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -224,8 +226,8 @@ class PhotoprismClient:
         # Bearer token used for API calls: the app password directly, or the
         # session access token obtained from username + password.
         self._bearer: str | None = token if auth_method == "app_password" else None
-        # Preview token captured from the most recent search response, used to
-        # build thumbnail URLs.
+        # Login config supplies a preview token even when search headers omit
+        # it. Later search responses can refresh it for thumbnail URLs.
         self.preview_token: str | None = None
 
     @property
@@ -251,6 +253,12 @@ class PhotoprismClient:
         if not token:
             raise PhotoprismAuthError("session login returned no access_token")
         self._bearer = token
+        config = data.get("config")
+        preview_token = config.get("previewToken") if isinstance(config, dict) else None
+        # A new session replaces the old preview token, including on re-login.
+        self.preview_token = (
+            preview_token.strip() or None if isinstance(preview_token, str) else None
+        )
 
     async def async_authenticate(self) -> None:
         """Ensure a usable Bearer token is available."""
@@ -259,8 +267,10 @@ class PhotoprismClient:
         elif not self._bearer:
             raise PhotoprismAuthError("no app password configured")
 
-    async def _get(self, path: str, params: dict[str, str] | None = None) -> tuple[Any, dict[str, str]]:
-        """GET returning ``(json, headers)``, re-authenticating once on 401."""
+    async def _get(
+        self, path: str, params: dict[str, str] | None = None
+    ) -> tuple[Any, Mapping[str, str]]:
+        """GET JSON and case-insensitive headers, re-authenticating once on 401."""
         if self._bearer is None:
             await self.async_authenticate()
         session = async_get_clientsession(self.hass)
@@ -274,7 +284,7 @@ class PhotoprismClient:
                         await self._login()
                         continue
                     resp.raise_for_status()
-                    return await resp.json(), dict(resp.headers)
+                    return await resp.json(), resp.headers
         raise PhotoprismAuthError("unauthorized after re-authentication")
 
     async def async_validate(self) -> None:

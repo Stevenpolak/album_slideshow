@@ -298,6 +298,8 @@ country:jp year:2023
 
 - PhotoPrism serves thumbnails with a rotatable preview token in the URL (its
   own cookie-free scheme), so no login token is ever placed in the image URL.
+  The integration reads the preview token from case-insensitive search response
+  headers or, with username/password authentication, from the login response.
 - All photo metadata (date, location, description) comes back inline with the
   photo list, so date filters, location and captions work from the first load
   with no background pass.
@@ -333,6 +335,10 @@ way anyone with the link can view it on the web.
   refresh.
 - The image URLs Apple hands out are signed and expire after about a day, so the
   integration re-fetches them on every album refresh.
+- Image downloads marked `application/octet-stream` are accepted only from
+  `icloud-content.com` and its subdomains, checked after redirects. Download
+  limits and image decoding checks still apply. HEIC/HEIF decoding depends on
+  the codecs available in your Home Assistant installation.
 
 ---
 

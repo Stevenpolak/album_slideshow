@@ -39,8 +39,9 @@ _LOGGER = logging.getLogger(__name__)
 # JPEG; RAW/NEF/etc. aren't supported as camera frames anyway.
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 
-# Only these content types are accepted as image bodies. If a server returns
-# HTML (captive portal, 404 page rendered as 200, etc.) we reject it early.
+# Image content types are accepted, with a narrow binary-image exception for
+# Apple's CDN below. HTML (captive portal, 404 page rendered as 200, etc.) is
+# still rejected early.
 _ACCEPTED_IMAGE_PREFIX = ("image/",)
 
 # Max candidates we'll scan when searching for a mismatched-orientation
@@ -1262,7 +1263,20 @@ class AlbumSlideshowCamera(Camera):
 
                     content_type = resp.headers.get("Content-Type", "")
                     primary = content_type.split(";", 1)[0].strip().lower()
-                    if primary and not primary.startswith(_ACCEPTED_IMAGE_PREFIX):
+                    icloud_binary_image = False
+                    if primary == "application/octet-stream":
+                        # Check the final response host after redirects, never
+                        # a substring of the original URL's path or query.
+                        host = (resp.url.host or "").lower()
+                        icloud_binary_image = (
+                            host == "icloud-content.com"
+                            or host.endswith(".icloud-content.com")
+                        )
+                    if (
+                        primary
+                        and not primary.startswith(_ACCEPTED_IMAGE_PREFIX)
+                        and not icloud_binary_image
+                    ):
                         _LOGGER.debug(
                             "Album Slideshow: rejecting %s, content-type %r is not an image",
                             url, primary,
