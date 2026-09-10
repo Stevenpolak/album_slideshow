@@ -9,8 +9,8 @@ Legacy "shared streams" backend (``www.icloud.com/sharedalbum/#TOKEN``):
 - ``POST {base}/webstream`` ``{"streamCtag": null}`` -> ``{streamName, photos:
     [{photoGuid, derivatives:{<height>:{checksum,width,height,fileSize}},
     dateCreated, caption, width, height}]}``. May first answer with a
-    ``330`` redirect carrying an ``X-Apple-MMe-Host`` header pointing at the
-    correct partition host; retry there.
+    ``330`` redirect carrying ``X-Apple-MMe-Host`` in the JSON body (or a
+    response header) pointing at the correct partition host; retry there.
 - ``POST {base}/webasseturls`` ``{"photoGuids": [...]}`` -> ``{items:
     {<checksum>: {url_location, url_path, url_expiry}}}``. Build the image URL
     as ``https://{url_location}{url_path}``; it is a signed CDN link that
@@ -31,14 +31,35 @@ Apple strips GPS from shared-album web data, so there is no location.
 from __future__ import annotations
 
 import base64
+from asyncio import sleep as _sleep
 from datetime import datetime, timezone
+import json
+import logging
+import re
+from time import monotonic
 from typing import Any
 from urllib.parse import quote, urlencode
 
+from aiohttp import (
+    ClientConnectionError,
+    ClientError,
+    ClientPayloadError,
+    ClientSSLError,
+    ClientTimeout,
+)
 import async_timeout
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+_LOGGER = logging.getLogger(__name__)
+
+# CloudKit retains its existing timeout. Legacy listing/URL resolution can be
+# slow for large albums; keep connection, idle-read and total time bounded.
 _TIMEOUT = 30
+_LEGACY_TIMEOUT = ClientTimeout(total=90, connect=15, sock_read=60)
+_REQUEST_ATTEMPTS = 2
+_RETRY_DELAY_SECONDS = 1.0
+_RETRYABLE_STATUSES = {408, 500, 502, 503, 504}
+_PARTITION_HOST_RE = re.compile(r"p[0-9]+-sharedstreams\.icloud\.com")
 _MAX_ASSETS = 20_000
 # webasseturls request batch size. A single call handled 40+ guids fine in
 # testing; chunking keeps request bodies bounded for very large albums.
@@ -277,6 +298,10 @@ def parse_photo_meta(photo: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+class IcloudRequestError(RuntimeError):
+    """A request failure safe to surface without share URLs or response data."""
+
+
 class IcloudClient:
     """Thin async wrapper over the iCloud shared-streams web API."""
 
@@ -291,62 +316,139 @@ class IcloudClient:
     def base_url(self) -> str:
         return base_url(self.token, self._host)
 
-    async def _post(self, path: str, body: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
+    async def _post(
+        self, path: str, body: dict[str, Any], *, operation: str
+    ) -> dict[str, Any]:
+        """Read JSON with a bounded retry and at most one trusted redirect.
+
+        All calls are read-only despite using POST. Retry only the failing
+        request, not previously completed URL batches. Never include a share
+        token, response body, or raw transport exception in diagnostics.
+        """
         session = async_get_clientsession(self.hass)
-        async with async_timeout.timeout(_TIMEOUT):
-            async with session.post(
-                self.base_url + path, json=body, headers=_API_HEADERS
-            ) as resp:
-                return resp.status, dict(resp.headers), await resp.read()
+        started = monotonic()
+        attempt = 1
+        redirects = 0
+        while True:
+            request_started = monotonic()
+            host = self._host or partition_host(self.token)
+            phase = "waiting for response headers"
+            retryable = False
+            try:
+                async with session.post(
+                    self.base_url + path,
+                    json=body,
+                    headers=_API_HEADERS,
+                    timeout=_LEGACY_TIMEOUT,
+                    allow_redirects=False,
+                ) as resp:
+                    status = resp.status
+                    if status not in (200, 330):
+                        detail = f"HTTP {status}"
+                        retryable = status in _RETRYABLE_STATUSES
+                    else:
+                        # A usable 330 header needs no body. Do not let a
+                        # stalled redirect body prevent reaching the new host.
+                        target = resp.headers.get("X-Apple-MMe-Host") if status == 330 else None
+                        payload = None
+                        if not target:
+                            phase = "reading response body"
+                            raw = await resp.read()
+                            phase = "decoding JSON"
+                            try:
+                                payload = json.loads(raw)
+                            except (ValueError, UnicodeDecodeError):
+                                payload = None
+                        if status == 330:
+                            phase = "handling partition redirect"
+                            if not target and isinstance(payload, dict):
+                                target = payload.get("X-Apple-MMe-Host")
+                            target = target.strip().lower() if isinstance(target, str) else ""
+                            if not _PARTITION_HOST_RE.fullmatch(target):
+                                detail = "HTTP 330 with invalid or missing partition host"
+                            elif redirects or target == host:
+                                detail = "HTTP 330 partition redirect loop"
+                            else:
+                                # The share token must never be sent to a
+                                # caller-supplied or lookalike redirect host.
+                                self._host = target
+                                redirects += 1
+                                _LOGGER.debug(
+                                    "iCloud %s: partition redirect %s -> %s",
+                                    operation, host, target,
+                                )
+                                continue
+                        elif isinstance(payload, dict):
+                            _LOGGER.debug(
+                                "iCloud %s succeeded (host=%s; endpoint=%s; "
+                                "attempt=%d/%d; elapsed=%.1fs; total_elapsed=%.1fs)",
+                                operation, host, path, attempt, _REQUEST_ATTEMPTS,
+                                monotonic() - request_started, monotonic() - started,
+                            )
+                            return payload
+                        else:
+                            detail = "Invalid JSON response (expected an object)"
+            except TimeoutError:
+                detail = (
+                    "TimeoutError "
+                    f"(connect={_LEGACY_TIMEOUT.connect}s, "
+                    f"read={_LEGACY_TIMEOUT.sock_read}s, "
+                    f"total={_LEGACY_TIMEOUT.total}s)"
+                )
+                retryable = True
+            except ClientSSLError as err:
+                detail = type(err).__name__
+            except (ClientConnectionError, ClientPayloadError) as err:
+                detail = type(err).__name__
+                retryable = True
+            except ClientError as err:
+                detail = type(err).__name__
+
+            error = IcloudRequestError(
+                f"iCloud {operation} failed while {phase} "
+                f"(host={host}; endpoint={path}; attempt={attempt}/{_REQUEST_ATTEMPTS}; "
+                f"elapsed={monotonic() - request_started:.1f}s; "
+                f"total_elapsed={monotonic() - started:.1f}s): {detail}"
+            )
+            if not retryable or attempt >= _REQUEST_ATTEMPTS:
+                # Raw aiohttp errors can contain the full album URL. Suppress
+                # that context even when HA logs a traceback of this error.
+                raise error from None
+            _LOGGER.warning("%s; retrying in %.1fs", error, _RETRY_DELAY_SECONDS)
+            await _sleep(_RETRY_DELAY_SECONDS)
+            attempt += 1
 
     async def async_get_photos(self) -> list[dict[str, Any]]:
         """Fetch the album's photo list, following a partition redirect once."""
-        import json as _json
-
-        status, headers, raw = await self._post("/webstream", {"streamCtag": None})
-        redirect_host = headers.get("X-Apple-MMe-Host")
-        if redirect_host and redirect_host != self._host:
-            # Our partition guess was wrong; Apple told us the right host.
-            self._host = redirect_host
-            status, headers, raw = await self._post("/webstream", {"streamCtag": None})
-        if status != 200:
-            raise RuntimeError(f"iCloud webstream failed: HTTP {status}")
-        payload = _json.loads(raw)
+        payload = await self._post(
+            "/webstream", {"streamCtag": None}, operation="photo list"
+        )
         return parse_webstream(payload)[:_MAX_ASSETS]
 
     async def async_get_asset_urls(
         self, guids: list[str]
     ) -> dict[str, dict[str, Any]]:
         """Resolve signed asset URLs for photo guids, keyed by checksum."""
-        import json as _json
-
         out: dict[str, dict[str, Any]] = {}
+        batch_count = (len(guids) + _URL_BATCH - 1) // _URL_BATCH
         for start in range(0, len(guids), _URL_BATCH):
             chunk = guids[start : start + _URL_BATCH]
-            status, _headers, raw = await self._post(
-                "/webasseturls", {"photoGuids": chunk}
+            batch_number = start // _URL_BATCH + 1
+            payload = await self._post(
+                "/webasseturls", {"photoGuids": chunk},
+                operation=f"image URLs batch {batch_number}/{batch_count} ({len(chunk)} photos)",
             )
-            if status != 200:
-                raise RuntimeError(f"iCloud webasseturls failed: HTTP {status}")
-            payload = _json.loads(raw)
-            items = payload.get("items") if isinstance(payload, dict) else None
+            items = payload.get("items")
             if isinstance(items, dict):
                 out.update(items)
         return out
 
     async def async_validate(self) -> str | None:
         """Return the album name if the token works, else raise."""
-        import json as _json
-
-        status, headers, raw = await self._post("/webstream", {"streamCtag": None})
-        redirect_host = headers.get("X-Apple-MMe-Host")
-        if redirect_host and redirect_host != self._host:
-            self._host = redirect_host
-            status, headers, raw = await self._post("/webstream", {"streamCtag": None})
-        if status != 200:
-            raise RuntimeError(f"iCloud webstream failed: HTTP {status}")
-        payload = _json.loads(raw)
-        return payload.get("streamName") if isinstance(payload, dict) else None
+        payload = await self._post(
+            "/webstream", {"streamCtag": None}, operation="link validation"
+        )
+        return payload.get("streamName")
 
 
 # --- CloudKit backend helpers ---------------------------------------------

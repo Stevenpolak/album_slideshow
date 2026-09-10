@@ -340,6 +340,31 @@ way anyone with the link can view it on the web.
   limits and image decoding checks still apply. HEIC/HEIF decoding depends on
   the codecs available in your Home Assistant installation.
 
+#### Testing slow legacy albums (v1.9.2 pre-release)
+
+For legacy Shared Albums that fail during setup or the first refresh, v1.9.2
+adds request-stage diagnostics and retries. It does not change the CloudKit
+backend or the image decoder.
+
+- Each listing or image-URL request has a 15-second connection limit, a
+  60-second idle-read limit and a 90-second total limit. These are per-request
+  limits, not a deadline for loading the whole album.
+- A timeout, connection/payload failure or selected transient HTTP error gets
+  one retry after one second. Successful URL batches are not repeated. TLS
+  errors, invalid links, rate limits and other non-transient failures are not
+  retried within the request.
+- Failures identify link validation, photo listing, or the image-URL batch
+  number, with the host, endpoint, attempt, elapsed time and error type/status.
+  These request diagnostics omit the share token and raw response contents.
+- Apple's HTTP 330 partition redirects are accepted from either the JSON body
+  or response headers, limited to one redirect to an Apple shared-streams host.
+
+To test: HACS → Album Slideshow → three-dot menu → **Redownload** → **v1.9.2**,
+then restart Home Assistant and retry the entry. If it still fails, share the
+new `Error querying iCloud album` or `iCloud validation failed` message after
+checking it for personal information. No album share link is needed for this
+diagnostic test. **v1.9.1 remains the stable release.**
+
 ---
 
 ### Synology Photos
