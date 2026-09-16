@@ -52,6 +52,29 @@ _SKIP_SEARCH_LIMIT = 30
 
 _MAX_RENDER_ATTEMPTS = 10
 
+# Fixed floor (in items) for the pairing cooldown exclusion zone, applied on
+# each side of the current index in addition to the percentage-based radius.
+# Keeps tiny albums from pairing consecutive/near-consecutive shots even when
+# a small percentage rounds down to zero.
+_PAIR_GAP_FLOOR = 2
+
+
+def _pair_exclusion_radius(n: int, min_gap_percent: float) -> int:
+    """Items to exclude on each side of the current index for pairing.
+
+    Combines ``_PAIR_GAP_FLOOR`` with a percentage of the album size so tiny
+    albums still get some separation while large albums scale
+    proportionally. A ``min_gap_percent`` of 0 disables the cooldown
+    entirely. The result is capped well below ``n / 2`` so eligible
+    candidates always remain, even for small albums (a ring buffer of
+    ``n`` items only has ``n - 1`` non-self candidates to begin with).
+    """
+    if n <= 3 or min_gap_percent <= 0:
+        return 0
+    radius = max(_PAIR_GAP_FLOOR, round(n * (min_gap_percent / 100.0)))
+    max_radius = (n - 3) // 2
+    return max(0, min(radius, max_radius))
+
 
 @dataclass(frozen=True, slots=True)
 class _NavigationCursor:
@@ -315,6 +338,7 @@ class AlbumSlideshowCamera(Camera):
             "aspect_ratio": self.store.aspect_ratio,
             "pair_divider_px": int(self.store.pair_divider_px),
             "pair_divider_color": self.store.pair_divider_color,
+            "pair_min_gap_percent": int(self.store.pair_min_gap_percent),
             "frame_id": self._frame_id,
             "navigation_buffer_size": self._buffer_depth,
             "previous_frames_cached": len(self._previous_frames),
@@ -1129,6 +1153,27 @@ class AlbumSlideshowCamera(Camera):
     ) -> tuple[Image.Image, MediaItem] | None:
         """Find an image with the opposite orientation of the canvas.
 
+        By default (``pair_min_gap_percent`` = 0) this is the original
+        search: walk forward from the very next item, nearest candidate
+        wins, fully deterministic. Setting ``pair_min_gap_percent`` above 0
+        opts into a cooldown search instead - candidates within that
+        percentage of the current index (wrapping on both sides, since the
+        album is a ring buffer) are excluded so the partner comes from a
+        meaningfully different part of the collection, and the remaining
+        candidates are shuffled before scanning so the same nearby partner
+        isn't picked deterministically every time. Small albums where the
+        cooldown would leave no candidates fall back to the deterministic
+        search (see ``_pair_exclusion_radius``); no eligible partner at all
+        (orientation, recent-repeat, or download failures) is a normal
+        outcome and simply returns ``None``, which the caller renders as a
+        single unpaired image.
+
+        This is a pure function of ``self._index``, ``self._recent_urls``
+        and ``self._rng``'s state, which is exactly what the navigation
+        buffer's cursor snapshots capture - so replaying a cached cursor
+        (Previous/Next) always reproduces the same paired frame; only
+        rendering a slide for the first time consumes new randomness.
+
         Uses metadata wherever possible - only candidates without width/height
         metadata are downloaded and decoded for their orientation. The returned
         PIL image is the caller's to close. The matching ``MediaItem`` is
@@ -1137,12 +1182,22 @@ class AlbumSlideshowCamera(Camera):
         if not items:
             return None
         n = len(items)
+        radius = _pair_exclusion_radius(n, self.store.pair_min_gap_percent)
+        if radius > 0:
+            excluded = {(self._index + d) % n for d in range(-radius, radius + 1)}
+            candidates = [idx for idx in range(n) if idx not in excluded]
+            self._rng.shuffle(candidates)
+        else:
+            candidates = (
+                (self._index + offset) % n
+                for offset in range(1, min(n, limit + 1))
+            )
+
         tries = 0
-        offset = 1
-        while tries < limit and offset < n:
-            idx = (self._index + offset) % n
+        for idx in candidates:
+            if tries >= limit:
+                break
             it = items[idx]
-            offset += 1
             tries += 1
 
             if it.url in self._recent_urls:
