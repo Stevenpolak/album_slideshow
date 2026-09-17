@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+from pathlib import Path
 
 import pytest
 
 from custom_components.album_slideshow import ente as en
+from custom_components.album_slideshow.config_flow import ConfigFlow
+from custom_components.album_slideshow.const import CONF_ALBUM_NAME, CONF_ENTE_URL
 
 nacl = pytest.importorskip("nacl.bindings")
 
@@ -82,6 +86,56 @@ def test_parse_share_link_rejects_garbage():
     assert en.parse_share_link("") is None
     assert en.parse_share_link(None) is None
     assert en.parse_share_link("ftp://albums.ente.io/?t=a#b") is None
+
+
+@pytest.mark.parametrize(
+    ("share_url", "expected_errors"),
+    [
+        (None, {}),
+        ("not a url", {CONF_ENTE_URL: "invalid_ente_url"}),
+        (
+            f"https://albums.ente.io/?t=TOKEN#{_KEY_B58}",
+            {"base": "ente_cannot_connect"},
+        ),
+    ],
+    ids=["initial", "invalid_link", "connection_error"],
+)
+def test_ente_form_supplies_example_url_placeholder(
+    monkeypatch, share_url, expected_errors
+):
+    flow = ConfigFlow()
+    flow.hass = object()
+    monkeypatch.setattr(
+        flow, "async_show_form", lambda **kwargs: kwargs, raising=False
+    )
+
+    async def fail_validation(_client):
+        raise RuntimeError("Connection failed")
+
+    monkeypatch.setattr(en.EnteClient, "async_validate", fail_validation)
+    user_input = (
+        None
+        if share_url is None
+        else {CONF_ALBUM_NAME: "Test", CONF_ENTE_URL: share_url}
+    )
+    result = asyncio.run(flow.async_step_ente(user_input))
+
+    assert result["step_id"] == "ente"
+    assert result["errors"] == expected_errors
+    example_url = "https://albums.ente.io/?t=TOKEN#KEY"
+    placeholders = result["description_placeholders"]
+    assert placeholders == {"example_url": example_url}
+    for filename in ("strings.json", "translations/en.json"):
+        path = Path(en.__file__).parent / filename
+        translations = json.loads(path.read_text(encoding="utf-8"))
+        messages = (
+            translations["config"]["step"]["ente"]["description"],
+            translations["config"]["error"]["invalid_ente_url"],
+        )
+        for message in messages:
+            assert "{example_url}" in message
+            assert "https://" not in message
+            assert example_url in message.format(**placeholders)
 
 
 # ── crypto round trips against real libsodium ──────────────────────────────

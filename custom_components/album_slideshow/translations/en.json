@@ -132,7 +132,7 @@
       },
       "ente": {
         "title": "Ente Photos public album",
-        "description": "Paste a public Ente album link, for example https://albums.ente.io/?t=TOKEN#KEY. Copy the whole link including the part after the # - that fragment is the decryption key and the album cannot be read without it. No Ente account or password is needed. Leave the API endpoint blank unless you self-host Ente.",
+        "description": "Paste a public Ente album link, for example {example_url}. Copy the whole link including the part after the # - that fragment is the decryption key and the album cannot be read without it. No Ente account or password is needed. Leave the API endpoint blank unless you self-host Ente.",
         "data": {
           "album_name": "Album name",
           "ente_url": "Album share link",
@@ -172,7 +172,7 @@
       "nextcloud_cannot_connect": "Could not connect to Nextcloud. Check the URL, username, app password and folder path.",
       "invalid_nextcloud_url": "That does not look like a Nextcloud Photos public album link.",
       "nextcloud_public_cannot_connect": "Could not connect to that Nextcloud album. Check the link is still valid.",
-      "invalid_ente_url": "That does not look like an Ente public album link. It should look like https://albums.ente.io/?t=TOKEN#KEY, including the part after the #."
+      "invalid_ente_url": "That does not look like an Ente public album link. It should look like {example_url}, including the part after the #."
       ,"ente_cannot_connect": "Could not open that Ente album. The link may be expired, revoked, or password-protected."
     }
   },

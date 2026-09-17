@@ -29,6 +29,7 @@ _make_stub(
     "homeassistant.helpers.aiohttp_client",
     "homeassistant.helpers.entity_platform",
     "homeassistant.helpers.entity_registry",
+    "homeassistant.helpers.selector",
     "homeassistant.helpers.storage",
     "homeassistant.helpers.update_coordinator",
     "async_timeout",

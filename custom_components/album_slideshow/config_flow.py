@@ -1254,7 +1254,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(
-            step_id="ente", data_schema=schema, errors=errors
+            step_id="ente",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "example_url": "https://albums.ente.io/?t=TOKEN#KEY"
+            },
         )
 
 
