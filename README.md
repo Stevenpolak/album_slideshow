@@ -385,10 +385,10 @@ way anyone with the link can view it on the web.
   limits and image decoding checks still apply. HEIC/HEIF decoding depends on
   the codecs available in your Home Assistant installation.
 
-#### Testing slow legacy albums (v1.9.2 pre-release)
+#### Troubleshooting slow legacy albums
 
-For legacy Shared Albums that fail during setup or the first refresh, v1.9.2
-adds request-stage diagnostics and retries. It does not change the CloudKit
+For legacy Shared Albums that fail during setup or the first refresh, v1.10.0
+includes request-stage diagnostics and retries. It does not change the CloudKit
 backend or the image decoder.
 
 - Each listing or image-URL request has a 15-second connection limit, a
@@ -404,11 +404,11 @@ backend or the image decoder.
 - Apple's HTTP 330 partition redirects are accepted from either the JSON body
   or response headers, limited to one redirect to an Apple shared-streams host.
 
-To test: HACS → Album Slideshow → three-dot menu → **Redownload** → **v1.9.2**,
+To test: HACS > Album Slideshow > three-dot menu > **Redownload** > **v1.10.0** (or newer),
 then restart Home Assistant and retry the entry. If it still fails, share the
 new `Error querying iCloud album` or `iCloud validation failed` message after
 checking it for personal information. No album share link is needed for this
-diagnostic test. **v1.9.1 remains the stable release.**
+diagnostic test.
 
 ---
 
