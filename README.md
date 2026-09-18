@@ -121,6 +121,50 @@ The following entities allow you to adjust slideshow behavior without restarting
 | Text | Pair divider color | #FFFFFF | Hex, named colors, transparent | Divider color between paired images |
 | Switch | Pause slideshow | off | on / off | Hold the current frame; advances pause until turned off |
 
+### Hide Photos From a Slideshow
+
+Hide photos from the ambient display without deleting, archiving, or changing
+anything in the source library. Exclusions belong to **one configured slideshow**,
+persist across restarts and album refreshes, and apply to every card using that
+slideshow's camera. Other configured slideshows are unaffected.
+
+In the card editor, use the hide, undo, and hidden-photo management controls
+below the form. To put these controls on the displayed card as well, enable
+**Interaction > Show photo controls** (`photo_controls: true`). This is off by
+default. Paired slides offer explicit **left/right** or **top/bottom** choices,
+plus **Hide both photos**.
+
+**Undo hide** restores the last hide action, including both photos if they were
+hidden together. **Hidden photos** opens a paginated list where individual photos
+can be restored. **Restore all** requires confirmation in the card. Hidden photos
+remain restorable even when they are no longer in the source album.
+
+Hiding or restoring resets that slideshow's Previous/Next buffer so cached frames
+cannot bring back hidden photos. Hiding the last eligible photo clears the display;
+undo and management controls remain available. The **Hidden photos** sensor shows
+the exclusion count without exposing the full list in entity history.
+
+Photo IDs come from the source, not filenames or expiring download URLs. Local
+files use normalized full paths: renaming or moving a file changes its identity.
+Replacing a source asset with a new ID also makes it a new photo. A photo without
+a usable ID cannot be hidden; refresh an older cached album to obtain IDs. Once
+a slideshow has exclusions, unidentified photos are skipped rather than risk
+redisplaying a hidden photo.
+
+Automation actions use the camera's `entry_id` attribute:
+
+| Action | Additional fields |
+|--------|-------------------|
+| `album_slideshow.hide_photo` | Optional `photo_ids` list from `displayed_photo_ids`, or `position`: `first`, `second`, `both`. Optional `frame_id` rejects a stale current-frame action. |
+| `album_slideshow.undo_hide` | None |
+| `album_slideshow.restore_photos` | `photo_ids` list |
+| `album_slideshow.restore_all_photos` | None; makes all excluded photos eligible again |
+| `album_slideshow.list_hidden_photos` | Optional `offset` and `limit` (1-100); returns `photos` and `total` as response data |
+
+The **Hide current photo** button handles single-photo slides. For pairs, use
+the card controls or specify a position/IDs in the action. ID-based actions target
+the chosen photo even if the slideshow advances before the request arrives.
+
 ---
 
 ## 📦 Installation
@@ -670,6 +714,8 @@ Each album you configure creates the following entities in Home Assistant.
 | Previous slide | Steps back to the previously shown image |
 | Next slide | Immediately advances to the next image |
 | Refresh album | Re-fetches album contents |
+| Hide current photo | Excludes a single displayed photo from this slideshow; pairs require an explicit choice in the card or action |
+| Undo hide | Restores the most recent hide action |
 
 ---
 
@@ -679,6 +725,7 @@ Each album you configure creates the following entities in Home Assistant.
 |--------|--------|-------------|
 | Album title | All | Title of the source album |
 | Media count | All | Number of images currently available |
+| Hidden photos | All | Number of persisted exclusions for this slideshow |
 | Image cache usage *(diagnostic)* | All | Current download cache size in MB |
 | Enrichment progress *(diagnostic)* | Local folder / Immich / Nextcloud / Ente | Percent of items whose metadata has been processed (EXIF/GPS for local folder and Nextcloud, per-asset detail for Immich, reverse-geocoding for Ente). Attributes include `phase`, `exif_done`/`exif_total`, `geocode_done`/`geocode_total`. |
 
@@ -691,7 +738,7 @@ The slideshow camera exposes per-frame metadata as attributes (use with `state_a
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `album_title` | string | Title of the source album |
-| `media_count` | int | Photos in the active playlist (after date filter) |
+| `media_count` | int | Photos in the active playlist (after date filter and exclusions) |
 | `media_count_total` | int | Total photos available before filtering |
 | `current_index` | int | Index of the current slide |
 | `current_filename` | string \| null | Source filename when known |
@@ -710,6 +757,11 @@ The slideshow camera exposes per-frame metadata as attributes (use with `state_a
 | `paused` | bool | Whether the slideshow is paused |
 | `date_filter` | string | Active date filter mode |
 | `frame_id` | int | Monotonic counter incremented on every committed slide. Used by the [card](#-album-slideshow-card) to detect new frames |
+| `entry_id` | string | Config entry ID for slideshow actions |
+| `displayed_photo_ids` | list | Opaque IDs for the rendered photo(s), first = left/top. An unavailable ID is `null`; an empty list means no ready photo |
+| `hidden_photo_count` | int | Number of persisted exclusions, including photos no longer in the source album |
+| `undo_hide_available` | bool | Whether the last hide action can be undone |
+| `empty_reason` | string \| null | `all_hidden` or `no_matching_photos` when the playlist is empty |
 | `navigation_buffer_size` | int | Configured number of fully rendered slides retained in each direction |
 | `previous_frames_cached` | int | Previous rendered frames currently available for immediate navigation |
 | `next_frames_preloaded` | int | Upcoming rendered frames currently available for immediate navigation |
@@ -749,6 +801,7 @@ fit: auto                   # auto | cover | contain
                             # auto inherits the camera's fill_mode (cover / contain / blur)
 background: '#000'          # color shown behind contained images
 tap_action: none            # none | more-info
+photo_controls: false
 caption:                    # overlay the photo's date, location and/or description
   show: [date, location]    #   any of: date, location, description (order = display order)
   position: bottom-left     #   top/center/bottom + -left/-center/-right, or center

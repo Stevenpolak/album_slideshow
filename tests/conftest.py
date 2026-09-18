@@ -25,6 +25,7 @@ _make_stub(
     "homeassistant.config_entries",
     "homeassistant.const",
     "homeassistant.core",
+    "homeassistant.exceptions",
     "homeassistant.helpers",
     "homeassistant.helpers.aiohttp_client",
     "homeassistant.helpers.entity_platform",
@@ -49,6 +50,21 @@ import homeassistant.helpers.entity_registry as _er
 
 _ce.ConfigEntry = object  # type: ignore[attr-defined]
 _core.HomeAssistant = object  # type: ignore[attr-defined]
+_core.SupportsResponse = types.SimpleNamespace(NONE="none", ONLY="only")
+
+import homeassistant.exceptions as _exceptions
+
+
+class _ServiceValidationError(Exception):
+    pass
+
+
+class _ConfigEntryNotReady(Exception):
+    pass
+
+
+_exceptions.ServiceValidationError = _ServiceValidationError
+_exceptions.ConfigEntryNotReady = _ConfigEntryNotReady
 
 import homeassistant.const as _const
 _const.EVENT_HOMEASSISTANT_STARTED = "homeassistant_started"  # type: ignore[attr-defined]

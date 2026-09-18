@@ -1,5 +1,11 @@
 DOMAIN = "album_slideshow"
 
+SERVICE_HIDE_PHOTO = "hide_photo"
+SERVICE_UNDO_HIDE = "undo_hide"
+SERVICE_RESTORE_PHOTOS = "restore_photos"
+SERVICE_RESTORE_ALL_PHOTOS = "restore_all_photos"
+SERVICE_LIST_HIDDEN_PHOTOS = "list_hidden_photos"
+
 CONF_PROVIDER = "provider"
 CONF_ALBUM_URL = "album_url"
 CONF_ALBUM_NAME = "album_name"

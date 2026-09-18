@@ -394,6 +394,7 @@ def _parse_album_item(raw: Any) -> MediaItem | None:
         captured_at=captured_at,
         uploaded_at=uploaded_at,
         byte_size=byte_size,
+        source_id=_media_key(raw),
     )
 
 

@@ -26,7 +26,7 @@
  *   tap_action: none        # none | more-info
  */
 
-const VERSION = "1.10.0";
+const VERSION = "1.11.0";
 
 const ANIMATED_TRANSITIONS = [
   "fade",
@@ -92,6 +92,211 @@ function isAlbumSlideshowCamera(state) {
   );
 }
 
+class PhotoControls {
+  constructor(container, getHass) {
+    this._getHass = getHass;
+    this._state = {};
+    this._busy = false;
+    this._root = container.attachShadow({ mode: "open" });
+    this._root.innerHTML = `
+      <style>
+        :host { display: block; font-family: var(--paper-font-body1_-_font-family, sans-serif); }
+        :host([hidden]) { display: none !important; }
+        button { font: inherit; color: inherit; cursor: pointer; border: 0; border-radius: 6px; background: var(--secondary-background-color, #eee); padding: 8px 12px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; }
+        button:hover { filter: brightness(.94); }
+        button:disabled { opacity: .4; cursor: default; }
+        button:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
+        .toolbar { display: flex; gap: 4px; padding: 4px; border-radius: 6px; background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); }
+        .icon { width: 44px; height: 44px; padding: 10px; flex: 0 0 44px; }
+        ha-icon { --mdc-icon-size: 22px; }
+        dialog { box-sizing: border-box; width: min(460px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: min(640px, calc(100dvh - 40px)); border: 1px solid var(--divider-color, #ddd); border-radius: 8px; padding: 16px; font-size: 14px; background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); }
+        dialog::backdrop { background: rgba(0, 0, 0, .45); }
+        header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        h3 { margin: 0; font-size: 18px; letter-spacing: 0; }
+        .choices { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+        .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--divider-color, #ddd); }
+        .name { min-width: 0; overflow-wrap: anywhere; }
+        small { display: block; color: var(--secondary-text-color, #666); margin-top: 4px; }
+        footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .pagination { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+        .error { margin: 8px 0; max-width: 320px; padding: 8px; background: var(--card-background-color, #fff); color: var(--error-color, #b71c1c); overflow-wrap: anywhere; }
+        [hidden] { display: none !important; }
+      </style>
+      <div class="toolbar">
+        <button type="button" class="icon" id="hide" title="Hide photo" aria-label="Hide photo"><ha-icon icon="mdi:eye-off"></ha-icon></button>
+        <button type="button" class="icon" id="undo" title="Undo hide" aria-label="Undo hide"><ha-icon icon="mdi:undo"></ha-icon></button>
+        <button type="button" class="icon" id="manage" title="Hidden photos" aria-label="Hidden photos"><ha-icon icon="mdi:image-off-outline"></ha-icon></button>
+      </div>
+      <div id="error" class="error" role="alert" hidden></div>
+      <dialog aria-labelledby="title">
+        <header><h3 id="title">Hidden photos</h3><button type="button" class="icon" id="close" title="Close" aria-label="Close"><ha-icon icon="mdi:close"></ha-icon></button></header>
+        <div id="dialog-error" class="error" role="alert" hidden></div>
+        <div id="content"></div>
+      </dialog>
+    `;
+    this._dialog = this._root.querySelector("dialog");
+    container.addEventListener("click", (event) => event.stopPropagation());
+    this._root.getElementById("hide").addEventListener("click", () => this._hide());
+    this._root.getElementById("undo").addEventListener("click", () => this._run("undo_hide"));
+    this._root.getElementById("manage").addEventListener("click", () => this._showHidden(0));
+    this._root.getElementById("close").addEventListener("click", () => this._dialog.close());
+  }
+
+  update(state) {
+    if (this._state.entryId && this._state.entryId !== state.entryId) {
+      this._dialog.close();
+    }
+    this._state = { ...state, photoIds: [...(state.photoIds || [])] };
+    this._root.getElementById("hide").disabled = this._busy || !state.entryId || !this._state.photoIds.some(Boolean);
+    this._root.getElementById("undo").disabled = this._busy || !state.entryId || !state.canUndo;
+    this._root.getElementById("manage").disabled = this._busy || !state.entryId;
+    this._root.getElementById("manage").title = `Hidden photos (${state.hiddenCount || 0})`;
+  }
+
+  async _call(service, data = {}, entryId = this._state.entryId) {
+    if (!entryId) throw new Error("This slideshow does not support photo exclusions");
+    const result = await this._getHass().callWS({
+      type: "call_service",
+      domain: "album_slideshow",
+      service,
+      service_data: { ...data, entry_id: entryId },
+      ...(service === "list_hidden_photos" ? { return_response: true } : {}),
+    });
+    return result?.response;
+  }
+
+  _error(message = "") {
+    for (const id of ["error", "dialog-error"]) {
+      const element = this._root.getElementById(id);
+      element.textContent = message;
+      element.hidden = !message;
+    }
+  }
+
+  async _run(service, data = {}, entryId = this._state.entryId) {
+    if (this._busy) return false;
+    this._busy = true;
+    this._error();
+    this.update(this._state);
+    const buttons = [...this._dialog.querySelectorAll("#content button")].map((button) => ({ button, disabled: button.disabled }));
+    buttons.forEach(({ button }) => { button.disabled = true; });
+    try {
+      await this._call(service, data, entryId);
+      this._dialog.close();
+      return true;
+    } catch (error) {
+      this._error(error.message || "Photo action failed");
+      return false;
+    } finally {
+      this._busy = false;
+      this.update(this._state);
+      buttons.forEach(({ button, disabled }) => { button.disabled = disabled; });
+    }
+  }
+
+  _button(label, icon, action, iconOnly = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    if (iconOnly) button.className = "icon";
+    const symbol = document.createElement("ha-icon");
+    symbol.setAttribute("icon", icon);
+    button.appendChild(symbol);
+    if (!iconOnly) button.appendChild(document.createTextNode(label));
+    button.addEventListener("click", action);
+    return button;
+  }
+
+  _open(title) {
+    this._viewGeneration = (this._viewGeneration || 0) + 1;
+    this._error();
+    this._root.getElementById("title").textContent = title;
+    const content = this._root.getElementById("content");
+    content.replaceChildren();
+    if (!this._dialog.open) this._dialog.showModal();
+    return content;
+  }
+
+  _hide() {
+    const { photoIds, orientation, entryId } = this._state;
+    if (photoIds.length === 1 && photoIds[0]) {
+      this._run("hide_photo", { photo_ids: [...photoIds] }, entryId);
+      return;
+    }
+    const content = this._open("Hide photo");
+    content.className = "choices";
+    const labels = orientation === "vertical" ? ["Hide top photo", "Hide bottom photo"] : ["Hide left photo", "Hide right photo"];
+    photoIds.forEach((photoId, index) => {
+      const button = this._button(labels[index], "mdi:eye-off", () => this._run("hide_photo", { photo_ids: [photoId] }, entryId));
+      button.disabled = !photoId;
+      content.appendChild(button);
+    });
+    const both = this._button("Hide both photos", "mdi:eye-off", () => this._run("hide_photo", { photo_ids: [...photoIds] }, entryId));
+    both.disabled = photoIds.length !== 2 || photoIds.some((photoId) => !photoId);
+    content.appendChild(both);
+  }
+
+  async _showHidden(offset) {
+    const entryId = this._state.entryId;
+    const content = this._open("Hidden photos");
+    const generation = this._viewGeneration;
+    content.className = "";
+    content.textContent = "Loading...";
+    try {
+      const page = await this._call("list_hidden_photos", { offset, limit: 25 }, entryId);
+      if (generation !== this._viewGeneration || this._state.entryId !== entryId || !this._dialog.open) return;
+      if (offset && !page.photos.length) {
+        await this._showHidden(Math.max(0, offset - 25));
+        return;
+      }
+      content.replaceChildren();
+      if (!page.photos.length) content.textContent = "No hidden photos";
+      for (const photo of page.photos) {
+        const row = document.createElement("div");
+        row.className = "row";
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = photo.name;
+        if (!photo.in_album) {
+          const status = document.createElement("small");
+          status.textContent = "Not in the current album";
+          name.appendChild(status);
+        }
+        row.append(name, this._button(`Restore ${photo.name}`, "mdi:restore", async () => {
+          if (await this._run("restore_photos", { photo_ids: [photo.photo_id] }, entryId)) await this._showHidden(offset);
+        }, true));
+        content.appendChild(row);
+      }
+      if (!page.total) return;
+      const footer = document.createElement("footer");
+      footer.appendChild(this._button("Restore all", "mdi:restore", () => {
+        const confirm = this._open("Restore all hidden photos?");
+        confirm.className = "choices";
+        confirm.append(
+          this._button("Restore all", "mdi:restore", async () => {
+            if (await this._run("restore_all_photos", {}, entryId)) await this._showHidden(0);
+          }),
+          this._button("Cancel", "mdi:close", () => this._showHidden(offset)),
+        );
+      }));
+      const pagination = document.createElement("div");
+      pagination.className = "pagination";
+      const previous = this._button("Previous page", "mdi:chevron-left", () => this._showHidden(Math.max(0, offset - 25)), true);
+      const next = this._button("Next page", "mdi:chevron-right", () => this._showHidden(offset + 25), true);
+      previous.disabled = offset === 0;
+      next.disabled = offset + page.photos.length >= page.total;
+      pagination.append(previous, document.createTextNode(`${offset + 1}-${offset + page.photos.length} of ${page.total}`), next);
+      footer.appendChild(pagination);
+      content.appendChild(footer);
+    } catch (error) {
+      if (generation !== this._viewGeneration || this._state.entryId !== entryId) return;
+      content.textContent = "";
+      this._error(error.message || "Could not load hidden photos");
+    }
+  }
+}
+
 // The card class is built lazily by a factory so the base class can be
 // resolved from the *live* ``window.HTMLElement`` at registration time.
 // See ``defineAlbumSlideshowCards`` for why this matters with the
@@ -135,6 +340,10 @@ function createAlbumSlideshowCardClass(Base) {
     // schedules a deferred swap that runs once the hold expires.
     this._holdSwapsUntil = 0;
     this._holdSwapTimer = null;
+    this._loadGeneration = 0;
+    this._displayedPhotoIds = [];
+    this._photoEntryId = null;
+    this._hiddenRevision = undefined;
   }
 
   setConfig(config) {
@@ -164,6 +373,7 @@ function createAlbumSlideshowCardClass(Base) {
       // Empty/missing background means inherit theme.
       background: typeof config.background === "string" ? config.background : "",
       tap_action: config.tap_action === "more-info" ? "more-info" : "none",
+      photo_controls: config.photo_controls === true,
       // Number of seconds the card freezes its visible slide after a
       // tap, so the more-info dialog can settle without the slideshow
       // marching forward beneath it. Set to 0 to disable.
@@ -257,6 +467,10 @@ function createAlbumSlideshowCardClass(Base) {
 
   _renderShell() {
     const c = this._config;
+    this._loadGeneration += 1;
+    this._displayedPhotoIds = [];
+    this._photoEntryId = null;
+    this._hiddenRevision = undefined;
     const aspect = c.aspect_ratio === "auto" ? "auto" : c.aspect_ratio;
     // When the user did not set ``background`` we fall through to the
     // theme's --ha-card-background, so the card naturally inherits the
@@ -347,6 +561,7 @@ function createAlbumSlideshowCardClass(Base) {
           font-family: var(--paper-font-body1_-_font-family, sans-serif);
         }
         .cap-line { font-weight: inherit; }
+        #photo-controls { position: absolute; right: 8px; ${c.caption?.position.startsWith("top") ? "bottom" : "top"}: 8px; z-index: 3; }
         .cap-box.cap-shadow {
           text-shadow:
             0 1px 2px rgba(0, 0, 0, 0.9),
@@ -363,8 +578,12 @@ function createAlbumSlideshowCardClass(Base) {
           <div class="captions" id="captions" aria-hidden="true"></div>
           <div class="placeholder" id="placeholder">Waiting for first frame...</div>
         </div>
+        <div id="photo-controls" ${c.photo_controls ? "" : "hidden"}></div>
       </ha-card>
     `;
+    this._photoControls = new PhotoControls(
+      this.shadowRoot.getElementById("photo-controls"), () => this._hass,
+    );
     const card = this.shadowRoot.querySelector("ha-card");
     if (this._config.tap_action === "more-info") {
       card.addEventListener("click", () => this._fireMoreInfo());
@@ -439,6 +658,17 @@ function createAlbumSlideshowCardClass(Base) {
       this._setPlaceholder(`Entity not found: ${this._config.entity}`);
       return;
     }
+    const attrs = state.attributes || {};
+    if (this._hiddenRevision !== undefined && attrs.hidden_revision !== this._hiddenRevision) {
+      this._clearDisplayedPhotos();
+    }
+    this._hiddenRevision = attrs.hidden_revision;
+    this._refreshPhotoControls(attrs);
+    if (attrs.empty_reason || (Array.isArray(attrs.displayed_photo_ids) && !attrs.displayed_photo_ids.length)) {
+      this._clearDisplayedPhotos();
+      this._setPlaceholder(attrs.empty_reason === "all_hidden" ? "All photos hidden" : attrs.empty_reason ? "No matching photos" : "Preparing next photo...");
+      return;
+    }
     // Hold visual swaps for the configured grace period after a tap.
     // The state cursor (`_lastFrameId`/`_lastEntityPicture`) is left
     // untouched during the hold; once the hold expires we re-enter
@@ -454,7 +684,6 @@ function createAlbumSlideshowCardClass(Base) {
       }
       return;
     }
-    const attrs = state.attributes || {};
     // ``frame_id`` increments on every slide commit; that's our primary
     // "new frame ready" signal. The integration also embeds frame_id in
     // ``entity_picture`` so that HA core surfaces (more-info, picture
@@ -495,15 +724,66 @@ function createAlbumSlideshowCardClass(Base) {
           description: attrs.description,
         }
       : null;
-    this._loadAndSwap(url, fit, blurBackdrop, captionData);
+    const photoData = {
+      photoIds: [...(attrs.displayed_photo_ids || [])],
+      entryId: attrs.entry_id,
+      orientation: attrs.pair_orientation,
+      frameId,
+      hiddenRevision: attrs.hidden_revision,
+      entityId: this._config.entity,
+    };
+    this._loadAndSwap(url, fit, blurBackdrop, captionData, photoData);
   }
 
-  _loadAndSwap(url, fit, blurBackdrop, captionData) {
+  _clearDisplayedPhotos() {
+    this._loadGeneration += 1;
+    this._displayedPhotoIds = [];
+    this._lastFrameId = null;
+    this._lastEntityPicture = null;
+    this._holdSwapsUntil = 0;
+    if (this._holdSwapTimer) clearTimeout(this._holdSwapTimer);
+    this._holdSwapTimer = null;
+    for (const id of ["a", "b", "blur-a", "blur-b"]) {
+      const image = this.shadowRoot.getElementById(id);
+      image.removeAttribute("src");
+      image.classList.remove("show", "exit", "enter");
+    }
+    this.shadowRoot.getElementById("captions").replaceChildren();
+    this._refreshPhotoControls(this._hass.states[this._config.entity]?.attributes || {});
+  }
+
+  _refreshPhotoControls(attrs) {
+    this._photoControls?.update({
+      entryId: attrs.entry_id,
+      photoIds: this._displayedPhotoIds,
+      orientation: this._photoOrientation,
+      hiddenCount: attrs.hidden_photo_count,
+      canUndo: attrs.undo_hide_available,
+    });
+  }
+
+  _loadAndSwap(url, fit, blurBackdrop, captionData, photoData) {
+    const generation = ++this._loadGeneration;
     // Pre-decode the new image so the swap is instant.
     const next = new Image();
     next.decoding = "async";
-    next.onload = () => this._performSwap(url, fit, blurBackdrop, captionData);
-    next.onerror = () => this._setPlaceholder("Failed to load slide");
+    next.onload = () => {
+      if (generation !== this._loadGeneration) return;
+      const attrs = this._hass.states[this._config.entity]?.attributes || {};
+      if (photoData.entityId !== this._config.entity || (attrs.frame_id ?? null) !== photoData.frameId || attrs.hidden_revision !== photoData.hiddenRevision) {
+        this._lastFrameId = null;
+        this._maybeSwap();
+        return;
+      }
+      this._displayedPhotoIds = [...photoData.photoIds];
+      this._photoEntryId = photoData.entryId;
+      this._photoOrientation = photoData.orientation;
+      this._performSwap(url, fit, blurBackdrop, captionData);
+      this._refreshPhotoControls(attrs);
+    };
+    next.onerror = () => {
+      if (generation === this._loadGeneration) this._setPlaceholder("Failed to load slide");
+    };
     next.src = url;
   }
 
@@ -934,6 +1214,7 @@ const CAPTION_DATE_FORMAT_OPTIONS = [
 ];
 
 const DEFAULTS = {
+  photo_controls: false,
   transition: "random",
   duration: 600,
   easing: "ease-in-out",
@@ -1036,6 +1317,7 @@ function createAlbumSlideshowCardEditorClass(Base) {
     // see entity state updates.
     const form = this.shadowRoot.querySelector("ha-form");
     if (form) form.hass = hass;
+    this._updatePhotoControls();
     // Re-run a full update when the camera set changes (warning box) or
     // when any surfaced integration entity changed state, so the live
     // controls stay in sync with the integration.
@@ -1277,6 +1559,7 @@ function createAlbumSlideshowCardEditorClass(Base) {
         title: "Interaction",
         icon: "mdi:gesture-tap",
         schema: [
+          { name: "photo_controls", selector: { boolean: {} } },
           {
             name: "tap_action",
             selector: { select: { mode: "dropdown", options: TAP_OPTIONS } },
@@ -1364,6 +1647,7 @@ function createAlbumSlideshowCardEditorClass(Base) {
     const c = this._config || {};
     return {
       entity: c.entity || "",
+      photo_controls: c.photo_controls === true,
       transition: c.transition || DEFAULTS.transition,
       duration: c.duration != null ? Number(c.duration) : DEFAULTS.duration,
       easing: c.easing || DEFAULTS.easing,
@@ -1441,6 +1725,7 @@ function createAlbumSlideshowCardEditorClass(Base) {
       background: "Background (optional)",
       tap_action: "Tap action",
       tap_pause_seconds: "Tap pause (seconds)",
+      photo_controls: "Show photo controls",
       caption_enabled: "Show caption overlay",
       caption_show: "Show",
       caption_position: "Position",
@@ -1517,12 +1802,16 @@ function createAlbumSlideshowCardEditorClass(Base) {
         <div class="info-slot"></div>
         <ha-form></ha-form>
         <div class="actions" hidden></div>
+        <div class="photo-controls"></div>
       </div>
     `;
     const form = this.shadowRoot.querySelector("ha-form");
     form.computeLabel = this._computeLabel;
     form.computeHelper = this._computeHelper;
     form.addEventListener("value-changed", (ev) => this._valueChanged(ev));
+    this._photoControls = new PhotoControls(
+      this.shadowRoot.querySelector(".photo-controls"), () => this._hass,
+    );
     this._rendered = true;
     this._update();
   }
@@ -1553,6 +1842,20 @@ function createAlbumSlideshowCardEditorClass(Base) {
     }
 
     this._renderActions();
+    this._updatePhotoControls();
+  }
+
+  _updatePhotoControls() {
+    if (!this._photoControls) return;
+    const attrs = this._hass?.states[this._config?.entity]?.attributes || {};
+    this.shadowRoot.querySelector(".photo-controls").hidden = !attrs.entry_id;
+    this._photoControls.update({
+      entryId: attrs.entry_id,
+      photoIds: attrs.displayed_photo_ids,
+      orientation: attrs.pair_orientation,
+      hiddenCount: attrs.hidden_photo_count,
+      canUndo: attrs.undo_hide_available,
+    });
   }
 
   _renderActions() {
@@ -1651,6 +1954,7 @@ function createAlbumSlideshowCardEditorClass(Base) {
 
     const n = { type: "custom:album-slideshow-card" };
 
+    if (data.photo_controls) n.photo_controls = true;
     if (data.entity) n.entity = data.entity;
 
     const t = data.transition || DEFAULTS.transition;

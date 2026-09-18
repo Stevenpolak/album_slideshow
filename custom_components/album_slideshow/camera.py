@@ -303,6 +303,25 @@ class AlbumSlideshowCamera(Camera):
         captured_at = _ts_to_iso(getattr(cur, "captured_at", None))
         captured_at_pair = self._last_captured_at_pair
         return {
+            "entry_id": self.entry.entry_id,
+            "displayed_photo_ids": (
+                self._current_frame.meta.get("photo_ids", [])
+                if self._current_frame is not None and not any(
+                    photo_id in self.store.hidden_photo_ids
+                    for photo_id in self._current_frame.meta.get("photo_ids", [])
+                ) else []
+            ),
+            "hidden_photo_count": len(self.store.hidden_photo_ids),
+            "hidden_revision": self.store.hidden_revision,
+            "undo_hide_available": bool(self.store.last_hidden_photo_ids),
+            "empty_reason": (
+                None if items else (
+                    "all_hidden" if data.get("items") and all(
+                        item.photo_id in self.store.hidden_photo_ids
+                        for item in data["items"]
+                    ) else "no_matching_photos"
+                )
+            ),
             "album_title": data.get("title"),
             "media_count": len(items),
             "media_count_total": len(data.get("items", []) or []),
@@ -412,12 +431,14 @@ class AlbumSlideshowCamera(Camera):
             self.store.date_filter,
             self.store.missing_date_mode,
             self.store.order_mode,
+            self.store.hidden_revision,
         )
         if self._effective_cache is not None and self._effective_cache[0] == hash(cache_key):
             return self._effective_cache[1]
 
         filtered = playlist.filter_items(
-            raw,
+            [item for item in raw if item.photo_id and item.photo_id not in self.store.hidden_photo_ids]
+            if self.store.hidden_photo_ids else raw,
             mode=self.store.date_filter,
             missing_date=self.store.missing_date_mode,
         )
@@ -475,6 +496,88 @@ class AlbumSlideshowCamera(Camera):
 
     async def async_force_refresh(self) -> None:
         await self.coordinator.async_request_refresh()
+
+    async def async_hide_photo(
+        self,
+        *,
+        photo_ids: list[str] | None = None,
+        position: str | None = None,
+        frame_id: int | None = None,
+    ) -> None:
+        async with self._navigation_lock:
+            if frame_id is not None and frame_id != self._frame_id:
+                raise ValueError("The displayed slide changed; try again")
+            if photo_ids is not None and position is not None:
+                raise ValueError("Choose photo IDs or a position, not both")
+            if photo_ids is None:
+                current_ids = (
+                    self._current_frame.meta.get("photo_ids", [])
+                    if self._current_frame is not None else []
+                )
+                if not current_ids:
+                    raise ValueError("There is no photo to hide")
+                if len(current_ids) > 1 and position is None:
+                    raise ValueError("This slide is paired; choose first, second, or both")
+                if position == "second" and len(current_ids) < 2:
+                    raise ValueError("This slide has no second photo")
+                if position not in (None, "first", "second", "both"):
+                    raise ValueError("Invalid photo position")
+                photo_ids = (
+                    current_ids if position == "both"
+                    else [current_ids[1 if position == "second" else 0]]
+                )
+            known_ids = {
+                item.photo_id for item in (self.coordinator.data or {}).get("items", [])
+                if item.photo_id
+            }
+            for frame in [self._current_frame, *self._previous_frames, *self._next_frames]:
+                if frame is not None:
+                    known_ids.update(photo_id for photo_id in frame.meta.get("photo_ids", []) if photo_id)
+            if not photo_ids or any(not photo_id or photo_id not in known_ids for photo_id in photo_ids):
+                raise ValueError("Photo identifier unavailable; refresh the album and try again")
+            if await self.store.async_set_photos_hidden(photo_ids, hidden=True):
+                await self._rebuild_after_exclusion_change()
+
+    async def async_restore_photos(
+        self, photo_ids: list[str] | None = None, *, undo: bool = False
+    ) -> None:
+        async with self._navigation_lock:
+            selected = (
+                self.store.last_hidden_photo_ids if undo
+                else self.store.hidden_photo_ids if photo_ids is None
+                else photo_ids
+            )
+            if await self.store.async_set_photos_hidden(selected, hidden=False):
+                await self._rebuild_after_exclusion_change()
+
+    async def _rebuild_after_exclusion_change(self) -> None:
+        self._effective_cache = None
+        self._invalidate_timeline()
+        self._random_order = []
+        self._random_pos = 0
+        self._recent_urls = []
+        await self._clear_current_frame()
+        try:
+            await self._rebuild_current_frame()
+        except Exception as err:
+            _LOGGER.warning("Album Slideshow: photos updated but replacement render failed: %s", err)
+
+    async def _clear_current_frame(self) -> None:
+        self._current_frame = None
+        self._framebuffer = None
+        self.store.last_frame = None
+        self._last_is_portrait = None
+        self._last_captured_at_pair = None
+        self._last_pair_frames = None
+        self._last_pair_orientation = None
+
+        def blank_frame():
+            with Image.new("RGB", (16, 9), "black") as image:
+                return ip.encode_image(image)
+
+        self._framebuffer = await self.hass.async_add_executor_job(blank_frame)
+        self._frame_id += 1
+        self.async_write_ha_state()
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         return self._framebuffer
@@ -579,6 +682,8 @@ class AlbumSlideshowCamera(Camera):
             try:
                 async with self._compose_semaphore:
                     composed, meta = await renderer._compose_for_index(items)
+                    meta = dict(meta or {})
+                    meta.setdefault("photo_ids", [getattr(items[renderer._index], "photo_id", None)])
                     cursor = self._capture_cursor(renderer)
                     if composed is None:
                         raise RuntimeError("Image composition returned no frame")
@@ -800,6 +905,7 @@ class AlbumSlideshowCamera(Camera):
         self._timeline_dirty = False
         items = self._effective_items()
         if not items:
+            await self._clear_current_frame()
             return False
 
         cursor = (
@@ -1028,6 +1134,10 @@ class AlbumSlideshowCamera(Camera):
                 finally:
                     ip.safe_close(other_img)
                 meta = {
+                    "photo_ids": (
+                        [getattr(cur, "photo_id", None), getattr(other_item, "photo_id", None)]
+                        if pair_frames else [getattr(cur, "photo_id", None)]
+                    ),
                     "is_portrait": cur_is_portrait,
                     "captured_at_pair": pair_meta,
                     "pair_frames": pair_frames,

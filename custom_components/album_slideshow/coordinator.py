@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
+from hashlib import sha256
 import json
 import logging
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -130,6 +132,17 @@ class MediaItem:
     # background enrichment task skip already-processed files even after
     # an HA restart (the flag round-trips through the items cache).
     exif_scanned: bool = False
+    photo_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.photo_id is None:
+            self.photo_id = _photo_identifier(self.source_id)
+
+
+def _photo_identifier(source_id: str | None) -> str | None:
+    if not source_id:
+        return None
+    return "v1:" + sha256(str(source_id).encode("utf-8")).hexdigest()
 
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
@@ -1198,6 +1211,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     description=raw.get("description"),
                     source_id=raw.get("source_id"),
                     exif_scanned=bool(raw.get("exif_scanned", False)),
+                    photo_id=raw.get("photo_id"),
                 ))
             except Exception:
                 continue
@@ -1230,6 +1244,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     "description": it.description,
                     "source_id": it.source_id,
                     "exif_scanned": it.exif_scanned,
+                    "photo_id": it.photo_id,
                 }
                 for it in items
             ],
@@ -1290,6 +1305,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     height=None,
                     mime_type=None,
                     filename=p.name,
+                    source_id=f"file://{os.path.abspath(p)}",
                 )
             )
 
@@ -1349,6 +1365,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     height=None,
                     mime_type=resolved[1],
                     filename=title,
+                    source_id=cid,
                 )
             )
 
@@ -2037,6 +2054,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     # The DAV href, so enrichment can fetch the original bytes
                     # even when the display URL is a preview.
                     source_id=href,
+                    photo_id=_photo_identifier(p.get("file_id") or href),
                 )
             )
 
@@ -2552,6 +2570,11 @@ class AlbumCoordinator(DataUpdateCoordinator):
         page_items = _find_largest_item_list(result) or _find_largest_item_list(data)
         api_items: list[MediaItem] = []
         dropped_videos = 0
+        scraped_ids = {
+            _photo_base_key(item.url): item.source_id
+            for item in scraped_items
+            if item.source_id
+        }
         if page_items:
             seen_urls: set[str] = set()
             for raw in page_items:
@@ -2586,6 +2609,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     captured_at=captured_at,
                     uploaded_at=None,
                     byte_size=byte_size,
+                    source_id=raw.get("id") or scraped_ids.get(_photo_base_key(url)),
                 ))
 
         # Cross-source date enrichment: publicalbum.org often returns a fuller

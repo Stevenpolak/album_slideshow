@@ -20,6 +20,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         AlbumCountSensor(entry, coordinator),
         AlbumTitleSensor(entry, coordinator),
         CacheUsageSensor(entry, coordinator),
+        HiddenPhotoCountSensor(entry, coordinator),
     ]
     if coordinator.provider in ENRICHING_PROVIDERS:
         # Diagnostic surface for the background enrichment pass (per-photo
@@ -66,6 +67,20 @@ class AlbumCountSensor(_BaseAlbumSensor):
     def native_value(self):
         data = self.coordinator.data or {}
         return len(data.get("items", []))
+
+
+class HiddenPhotoCountSensor(_BaseAlbumSensor):
+    _attr_icon = "mdi:eye-off"
+
+    def __init__(self, entry: ConfigEntry, coordinator: AlbumCoordinator) -> None:
+        super().__init__(entry, coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_hidden_photo_count"
+        self._attr_name = "Hidden photos"
+        coordinator.store.add_listener(self.async_write_ha_state)
+
+    @property
+    def native_value(self):
+        return len(self.coordinator.store.hidden_photo_ids)
 
 
 class AlbumTitleSensor(_BaseAlbumSensor):

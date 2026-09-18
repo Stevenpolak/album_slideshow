@@ -6,6 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, SERVICE_REFRESH_ALBUM, ATTR_ENTRY_ID
+from .const import SERVICE_HIDE_PHOTO, SERVICE_UNDO_HIDE
 from .coordinator import AlbumCoordinator
 
 
@@ -16,6 +17,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             PreviousSlideButton(hass, entry, coordinator),
             NextSlideButton(hass, entry, coordinator),
             RefreshAlbumButton(hass, entry, coordinator),
+            HidePhotoButton(hass, entry, coordinator),
+            UndoHideButton(hass, entry, coordinator),
         ]
     )
 
@@ -76,4 +79,30 @@ class RefreshAlbumButton(_BaseButton):
             SERVICE_REFRESH_ALBUM,
             {ATTR_ENTRY_ID: self.entry.entry_id},
             blocking=False,
+        )
+
+
+class HidePhotoButton(_BaseButton):
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, coordinator: AlbumCoordinator) -> None:
+        super().__init__(hass, entry, coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_hide_photo"
+        self._attr_name = "Hide current photo"
+        self._attr_icon = "mdi:eye-off"
+
+    async def async_press(self) -> None:
+        await self.hass.services.async_call(
+            DOMAIN, SERVICE_HIDE_PHOTO, {ATTR_ENTRY_ID: self.entry.entry_id}, blocking=True
+        )
+
+
+class UndoHideButton(_BaseButton):
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, coordinator: AlbumCoordinator) -> None:
+        super().__init__(hass, entry, coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_undo_hide"
+        self._attr_name = "Undo hide"
+        self._attr_icon = "mdi:undo"
+
+    async def async_press(self) -> None:
+        await self.hass.services.async_call(
+            DOMAIN, SERVICE_UNDO_HIDE, {ATTR_ENTRY_ID: self.entry.entry_id}, blocking=True
         )

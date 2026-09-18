@@ -5,12 +5,22 @@ import json
 import logging
 import os
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN, SERVICE_NEXT_SLIDE, SERVICE_PREVIOUS_SLIDE, SERVICE_REFRESH_ALBUM, ATTR_ENTRY_ID
+from .const import (
+    SERVICE_HIDE_PHOTO,
+    SERVICE_UNDO_HIDE,
+    SERVICE_RESTORE_PHOTOS,
+    SERVICE_RESTORE_ALL_PHOTOS,
+    SERVICE_LIST_HIDDEN_PHOTOS,
+)
 from .store import SlideshowStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -353,6 +363,83 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
+def _register_photo_services(hass: HomeAssistant) -> None:
+    def camera_for(call):
+        camera = hass.data.get(DOMAIN, {}).get(call.data[ATTR_ENTRY_ID], {}).get("camera")
+        if camera is None:
+            raise ServiceValidationError("This album slideshow is not loaded")
+        return camera
+
+    async def hide_photo(call):
+        camera = camera_for(call)
+        try:
+            await camera.async_hide_photo(
+                photo_ids=call.data.get("photo_ids"),
+                position=call.data.get("position"),
+                frame_id=call.data.get("frame_id"),
+            )
+        except (ValueError, OSError) as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def undo_hide(call):
+        await camera_for(call).async_restore_photos(undo=True)
+
+    async def restore_photos(call):
+        await camera_for(call).async_restore_photos(call.data["photo_ids"])
+
+    async def restore_all_photos(call):
+        await camera_for(call).async_restore_photos()
+
+    async def list_hidden_photos(call):
+        camera = camera_for(call)
+        hidden = sorted(camera.store.hidden_photo_ids)
+        offset = call.data.get("offset", 0)
+        limit = call.data.get("limit", 50)
+        items = {
+            item.photo_id: item
+            for item in (camera.coordinator.data or {}).get("items", [])
+            if item.photo_id in camera.store.hidden_photo_ids
+        }
+        return {
+            "total": len(hidden),
+            "offset": offset,
+            "photos": [
+                {
+                    "photo_id": photo_id,
+                    "name": (items[photo_id].filename if photo_id in items else None) or f"Photo {photo_id[-8:]}",
+                    "in_album": photo_id in items,
+                }
+                for photo_id in hidden[offset:offset + limit]
+            ],
+        }
+
+    identifiers = vol.All([str], vol.Length(min=1))
+    registrations = (
+        (SERVICE_HIDE_PHOTO, hide_photo, {
+            vol.Optional("photo_ids"): identifiers,
+            vol.Optional("position"): vol.In(["first", "second", "both"]),
+            vol.Optional("frame_id"): vol.All(vol.Coerce(int), vol.Range(min=0)),
+        }),
+        (SERVICE_UNDO_HIDE, undo_hide, {}),
+        (SERVICE_RESTORE_PHOTOS, restore_photos, {vol.Required("photo_ids"): identifiers}),
+        (SERVICE_RESTORE_ALL_PHOTOS, restore_all_photos, {}),
+        (SERVICE_LIST_HIDDEN_PHOTOS, list_hidden_photos, {
+            vol.Optional("offset", default=0): vol.All(vol.Coerce(int), vol.Range(min=0)),
+            vol.Optional("limit", default=50): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+        }),
+    )
+    for name, handler, fields in registrations:
+        if not hass.services.has_service(DOMAIN, name):
+            hass.services.async_register(
+                DOMAIN, name, handler,
+                schema=vol.Schema({vol.Required(ATTR_ENTRY_ID): str, **fields}),
+                supports_response=(
+                    SupportsResponse.ONLY if name == SERVICE_LIST_HIDDEN_PHOTOS
+                    else SupportsResponse.NONE
+                ),
+            )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .coordinator import AlbumCoordinator
 
@@ -372,6 +459,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_cleanup_legacy_entities(hass, entry)
 
     store = SlideshowStore()
+    try:
+        await store.async_load_hidden_photos(hass, entry.entry_id)
+    except Exception as err:
+        raise ConfigEntryNotReady("Could not load hidden photos; slideshow has not started") from err
     coordinator = AlbumCoordinator(hass, entry, store)
     await coordinator.async_config_entry_first_refresh()
 
@@ -423,6 +514,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.services.has_service(DOMAIN, SERVICE_REFRESH_ALBUM):
         hass.services.async_register(DOMAIN, SERVICE_REFRESH_ALBUM, _refresh_album)
 
+    _register_photo_services(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     store.notify()
