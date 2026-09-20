@@ -277,6 +277,39 @@ def test_hide_cancels_an_inflight_preload(monkeypatch):
     asyncio.run(run())
 
 
+def test_hide_cached_photo_does_not_wait_for_another_albums_download(monkeypatch):
+    async def run():
+        items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(3)]
+        cam = await _camera(items, monkeypatch)
+        other = await _camera(items, monkeypatch)
+        other.hass = cam.hass
+        download_started = asyncio.Event()
+        release_download = asyncio.Event()
+        original_fetch = camera.AlbumSlideshowCamera._fetch_bytes
+
+        async def fetch(renderer, url):
+            if renderer.coordinator is other.coordinator:
+                download_started.set()
+                await release_download.wait()
+            return await original_fetch(renderer, url)
+
+        monkeypatch.setattr(camera.AlbumSlideshowCamera, "_fetch_bytes", fetch)
+        unrelated = asyncio.create_task(
+            other._render_available_frame(other._capture_cursor(), items, advance=False)
+        )
+        try:
+            await asyncio.wait_for(download_started.wait(), timeout=1)
+            await asyncio.wait_for(cam.async_hide_photo(), timeout=1)
+            assert cam._current_frame is not None
+            assert items[0].photo_id not in cam._current_frame.meta["photo_ids"]
+            assert not unrelated.done()
+        finally:
+            release_download.set()
+            await unrelated
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("hide_all", [False, True])
 def test_startup_filters_restored_exclusions_before_first_frame(monkeypatch, hide_all):
     items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(2)]

@@ -680,16 +680,13 @@ class AlbumSlideshowCamera(Camera):
 
             composed: Image.Image | None = None
             try:
-                async with self._compose_semaphore:
-                    composed, meta = await renderer._compose_for_index(items)
-                    meta = dict(meta or {})
-                    meta.setdefault("photo_ids", [getattr(items[renderer._index], "photo_id", None)])
-                    cursor = self._capture_cursor(renderer)
-                    if composed is None:
-                        raise RuntimeError("Image composition returned no frame")
-                    encoded = await self.hass.async_add_executor_job(
-                        ip.encode_image, composed
-                    )
+                composed, meta = await renderer._compose_for_index(items)
+                meta = dict(meta or {})
+                meta.setdefault("photo_ids", [getattr(items[renderer._index], "photo_id", None)])
+                cursor = self._capture_cursor(renderer)
+                if composed is None:
+                    raise RuntimeError("Image composition returned no frame")
+                encoded = await self._async_image_job(ip.encode_image, composed)
                 return _RenderedFrame(encoded, cursor, meta or {})
             except asyncio.CancelledError:
                 raise
@@ -1014,6 +1011,10 @@ class AlbumSlideshowCamera(Camera):
             domain_data["compose_semaphore"] = sem
         return sem
 
+    async def _async_image_job(self, function, *args):
+        async with self._compose_semaphore:
+            return await self.hass.async_add_executor_job(function, *args)
+
     def _do_advance(self, count: int, items: list) -> None:
         """Advance _index to the next slide and commit random-order position."""
         if count <= 0:
@@ -1084,7 +1085,7 @@ class AlbumSlideshowCamera(Camera):
         if not cur_bytes:
             raise RuntimeError(f"Failed to fetch image: {cur.url}")
 
-        img = await self.hass.async_add_executor_job(
+        img = await self._async_image_job(
             ip.open_image, cur_bytes, (width, height)
         )
         try:
@@ -1106,7 +1107,7 @@ class AlbumSlideshowCamera(Camera):
                 pair_frames: list[dict] | None = None
                 try:
                     if other_img is not None:
-                        composed = await self.hass.async_add_executor_job(
+                        composed = await self._async_image_job(
                             ip.pair_images, img, other_img, width, height, fill_mode,
                             is_portrait_canvas, divider, divider_fill, transparent_divider,
                         )
@@ -1128,7 +1129,7 @@ class AlbumSlideshowCamera(Camera):
                         ]
                         pair_meta = [f["captured_at"] for f in pair_frames]
                     else:
-                        composed = await self.hass.async_add_executor_job(
+                        composed = await self._async_image_job(
                             ip.render_image, img, fill_mode, width, height,
                         )
                 finally:
@@ -1151,7 +1152,7 @@ class AlbumSlideshowCamera(Camera):
                 }
                 return composed, meta
 
-            composed = await self.hass.async_add_executor_job(
+            composed = await self._async_image_job(
                 ip.render_image, img, fill_mode, width, height
             )
             return composed, {
@@ -1196,14 +1197,14 @@ class AlbumSlideshowCamera(Camera):
             if not b:
                 self._peek_advance(count, items)
                 continue
-            img = await self.hass.async_add_executor_job(ip.open_image, b, (width, height))
+            img = await self._async_image_job(ip.open_image, b, (width, height))
             try:
                 if ip.is_portrait_item(cur, img) != is_portrait_canvas:
                     self._peek_advance(count, items)
                     continue
                 if self._index != start:
                     self._do_advance(count, items)
-                composed = await self.hass.async_add_executor_job(
+                composed = await self._async_image_job(
                     ip.render_image, img, fill_mode, width, height
                 )
                 return composed, {
@@ -1226,10 +1227,10 @@ class AlbumSlideshowCamera(Camera):
         b = await self._fetch_bytes(item.url)
         if not b:
             return None, None
-        img = await self.hass.async_add_executor_job(ip.open_image, b, (width, height))
+        img = await self._async_image_job(ip.open_image, b, (width, height))
         try:
             cur_is_portrait = ip.is_portrait_item(item, img)
-            composed = await self.hass.async_add_executor_job(
+            composed = await self._async_image_job(
                 ip.render_image, img, fill_mode, width, height
             )
             return composed, {
@@ -1249,7 +1250,7 @@ class AlbumSlideshowCamera(Camera):
         if composed is None:
             return None
         try:
-            return await self.hass.async_add_executor_job(ip.encode_image, composed)
+            return await self._async_image_job(ip.encode_image, composed)
         finally:
             ip.safe_close(composed)
 
@@ -1323,7 +1324,7 @@ class AlbumSlideshowCamera(Camera):
                 continue
 
             try:
-                img = await self.hass.async_add_executor_job(ip.open_image, b, (width, height))
+                img = await self._async_image_job(ip.open_image, b, (width, height))
             except Exception:
                 continue
 

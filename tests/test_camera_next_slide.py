@@ -131,6 +131,43 @@ def test_private_renderer_does_not_mutate_live_ordering_state():
     assert cam._recent_urls == ["a"]
 
 
+def test_image_jobs_still_share_one_cpu_slot_across_albums():
+    async def run():
+        first_started = asyncio.Event()
+        second_requested = asyncio.Event()
+        release_job = asyncio.Event()
+        submitted = []
+
+        class Hass(_FakeHass):
+            async def async_add_executor_job(self, function, *args):
+                submitted.append(args[0])
+                first_started.set()
+                await release_job.wait()
+                return function(*args)
+
+        first = _make_cam()
+        second = _make_cam()
+        first.hass = second.hass = Hass()
+        first_task = asyncio.create_task(first._async_image_job(str, "first"))
+        await first_started.wait()
+
+        async def second_job():
+            second_requested.set()
+            return await second._async_image_job(str, "second")
+
+        second_task = asyncio.create_task(second_job())
+        try:
+            await second_requested.wait()
+            assert submitted == ["first"]
+        finally:
+            release_job.set()
+            results = await asyncio.gather(first_task, second_task)
+        assert submitted == ["first", "second"]
+        assert results == ["first", "second"]
+
+    asyncio.run(run())
+
+
 def test_render_available_frame_composes_on_private_renderer(monkeypatch):
     cam = _make_cam()
     cam.hass = _FakeHass()
