@@ -14,6 +14,8 @@ API shape (Immich v1.13x / v3, ``/api`` prefix, ``x-api-key`` header):
     ``originalFileName`` but NOT ``exifInfo``.
 - ``GET /api/assets/{id}`` -> full asset incl ``exifInfo`` (lat/long, city,
     country, description) - used to enrich location/description per asset.
+- ``GET /api/faces?id={id}`` -> recognised faces and bounding boxes - used to
+    focus cover-mode crops when the source contains selected people.
 - Image bytes: ``/api/assets/{id}/thumbnail?size=preview|fullsize`` or
     ``/api/assets/{id}/original`` (all require the ``x-api-key`` header).
 """
@@ -241,6 +243,83 @@ def parse_asset_exif(asset: Any) -> dict[str, Any]:
     return out
 
 
+def selected_person_ids(
+    selection_type: str | None, selection_id: str | None
+) -> set[str]:
+    """Return the people explicitly selected for an Immich source.
+
+    Current entries use a composite JSON selection, while older entries can
+    still carry the legacy ``person``/``people`` shapes. Album-only, favorite,
+    random and custom-search sources intentionally return an empty set: there
+    is no user-selected face to prioritise for those sources.
+    """
+    if selection_type == "person":
+        return {selection_id} if selection_id else set()
+    if selection_type == "people":
+        return {person_id for person_id in (selection_id or "").split(",") if person_id}
+    if selection_type == "composite":
+        return set(parse_composite_selection(selection_id)["people"])
+    return set()
+
+
+def parse_face_focus(
+    faces: Any, person_ids: set[str]
+) -> tuple[float, float] | None:
+    """Return a normalised crop focus for the selected people in an asset.
+
+    Immich reports face boxes in the coordinate space described by each
+    face's ``imageWidth``/``imageHeight``. Normalising each box makes the
+    focus independent of whether Album Slideshow downloads a preview,
+    full-size derivative or original. When several selected people appear in
+    the same photo, focus on the centre of their combined region.
+    """
+    if not isinstance(faces, list) or not person_ids:
+        return None
+
+    boxes: list[tuple[float, float, float, float]] = []
+    for face in faces:
+        if not isinstance(face, dict):
+            continue
+        person = face.get("person")
+        if not isinstance(person, dict) or person.get("id") not in person_ids:
+            continue
+        width = face.get("imageWidth")
+        height = face.get("imageHeight")
+        coords = (
+            face.get("boundingBoxX1"),
+            face.get("boundingBoxY1"),
+            face.get("boundingBoxX2"),
+            face.get("boundingBoxY2"),
+        )
+        if (
+            not isinstance(width, (int, float))
+            or not isinstance(height, (int, float))
+            or width <= 0
+            or height <= 0
+            or any(not isinstance(value, (int, float)) for value in coords)
+        ):
+            continue
+        x1, y1, x2, y2 = coords
+        if x2 <= x1 or y2 <= y1:
+            continue
+        boxes.append(
+            (
+                max(0.0, min(1.0, x1 / width)),
+                max(0.0, min(1.0, y1 / height)),
+                max(0.0, min(1.0, x2 / width)),
+                max(0.0, min(1.0, y2 / height)),
+            )
+        )
+
+    if not boxes:
+        return None
+    left = min(box[0] for box in boxes)
+    top = min(box[1] for box in boxes)
+    right = max(box[2] for box in boxes)
+    bottom = max(box[3] for box in boxes)
+    return ((left + right) / 2, (top + bottom) / 2)
+
+
 class ImmichClient:
     """Thin async wrapper over the Immich REST API."""
 
@@ -373,3 +452,7 @@ class ImmichClient:
 
     async def async_get_asset(self, asset_id: str) -> dict[str, Any]:
         return await self._get(f"/api/assets/{asset_id}")
+
+    async def async_get_faces(self, asset_id: str) -> list[dict[str, Any]]:
+        data = await self._get(f"/api/faces?id={asset_id}")
+        return data if isinstance(data, list) else []

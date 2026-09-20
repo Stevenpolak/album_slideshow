@@ -259,8 +259,9 @@ Immich server, prefer this over the Media Source route.
 
 1. In Immich, create an API key: **Account Settings → API Keys → New API Key**.
    Read scopes are enough: `server.about`, `asset.read`, `asset.view`,
-   `asset.download`, `album.read`, `person.read`. `server.about` is what the
-   setup step uses to check the URL and key, so setup fails without it.
+   `asset.download`, `album.read`, `person.read`, `face.read`. `server.about`
+   is what the setup step uses to check the URL and key, so setup fails
+   without it.
 2. Add the integration and choose **Immich (direct API, full metadata)**.
 3. Enter your Immich URL (e.g. `http://192.168.1.10:2283`) and the API key.
 4. Give it a name, tick what you want to show, and choose the image quality.
@@ -308,8 +309,15 @@ endpoint (with `type` forced to images). Examples:
   exposed to the dashboard client.
 - Capture dates come from the asset list up front, so date filters and date
   ordering work immediately. Location and description are filled in by a
-  background pass (one lightweight call per photo, cached), so they appear
-  shortly after the first load, the same way local-folder EXIF does.
+  background pass, so they appear shortly after the first load, the same way
+  local-folder EXIF does.
+- When the source includes selected people and the fill mode is **Cover**, the
+  same background pass reads Immich's recognized-face coordinates and focuses
+  each crop on the selected people. Group photos use the centre of the combined
+  selected-face region. Missing faces or unavailable `face.read` permission
+  fall back to the normal centred crop. Face focus requires the direct Immich
+  provider; Home Assistant's generic Media Source does not expose asset and
+  face metadata.
 
 ---
 

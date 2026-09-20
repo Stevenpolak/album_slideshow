@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from custom_components.album_slideshow import immich
 
 
@@ -138,6 +140,58 @@ def test_parse_asset_exif_empty_description_ignored():
 def test_parse_asset_exif_no_exif():
     assert immich.parse_asset_exif({}) == {}
     assert immich.parse_asset_exif(None) == {}
+
+
+# ── selected-person smart crop ─────────────────────────────────────────────
+
+def test_selected_person_ids_supports_current_composite_entries():
+    selected = immich.selected_person_ids(
+        "composite",
+        '{"albums": ["a1"], "people": ["p1", "p2"], "favorites": true}',
+    )
+    assert selected == {"p1", "p2"}
+
+
+def test_selected_person_ids_supports_legacy_entries():
+    assert immich.selected_person_ids("person", "p1") == {"p1"}
+    assert immich.selected_person_ids("people", "p1,p2") == {"p1", "p2"}
+    assert immich.selected_person_ids("album", "a1") == set()
+
+
+def _face(person_id, x1, y1, x2, y2, width=1000, height=2000):
+    return {
+        "imageWidth": width,
+        "imageHeight": height,
+        "boundingBoxX1": x1,
+        "boundingBoxY1": y1,
+        "boundingBoxX2": x2,
+        "boundingBoxY2": y2,
+        "person": {"id": person_id, "name": person_id},
+    }
+
+
+def test_parse_face_focus_uses_only_selected_person():
+    faces = [
+        _face("selected", 100, 200, 300, 600),
+        _face("bystander", 700, 1200, 900, 1600),
+    ]
+    assert immich.parse_face_focus(faces, {"selected"}) == (0.2, 0.2)
+
+
+def test_parse_face_focus_combines_multiple_selected_people():
+    faces = [
+        _face("p1", 100, 200, 300, 600),
+        _face("p2", 500, 1000, 700, 1400),
+    ]
+    # Union is x=.1..7 and y=.1..7 in normalised image coordinates.
+    assert immich.parse_face_focus(faces, {"p1", "p2"}) == pytest.approx((0.4, 0.4))
+
+
+def test_parse_face_focus_ignores_missing_or_invalid_faces():
+    invalid = _face("p1", 300, 600, 100, 200)
+    assert immich.parse_face_focus([invalid], {"p1"}) is None
+    assert immich.parse_face_focus([_face("other", 1, 1, 2, 2)], {"p1"}) is None
+    assert immich.parse_face_focus(None, {"p1"}) is None
 
 
 # ── parse_random ───────────────────────────────────────────────────────────
