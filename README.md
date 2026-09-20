@@ -128,7 +128,7 @@ anything in the source library. Exclusions belong to **one configured slideshow*
 persist across restarts and album refreshes, and apply to every card using that
 slideshow's camera. Other configured slideshows are unaffected.
 
-In the card editor, use the hide, undo, and hidden-photo management controls
+In the card editor, use the navigation, pause, and photo-management controls
 below the form. For controls on the displayed card, choose
 **Interaction > Photo controls**:
 
@@ -137,6 +137,14 @@ below the form. For controls on the displayed card, choose
 | **Off** (default) | No controls on the displayed card; they remain available in the editor |
 | **On demand** | Hold the photo for half a second to reveal the toolbar; desktop hover or keyboard focus also reveals it |
 | **Always** | Keep the toolbar visible |
+
+The toolbar groups **Previous**, **Pause/Resume**, and **Next** separately from
+**Hide**, **Undo hide**, and **Hidden photos**. Previous is disabled when no earlier
+frame is cached. Previous/Next update the displayed photo even while the toolbar
+is holding it, and still work while the slideshow is paused. Pause/Resume controls
+the slideshow's existing pause switch, so it affects all cards using that camera;
+the icon follows the actual Home Assistant state. **Refresh album** stays in the
+editor's Actions section.
 
 With **On demand**, the displayed photo stays steady while choosing an action.
 The toolbar dismisses immediately when the mouse leaves the card. It also dismisses

@@ -278,6 +278,202 @@ test("photo actions cannot run without a config entry", async () => {
   await assert.rejects(controls._call("hide_photo"), /does not support/);
 });
 
+test("navigation uses existing slideshow services and the captured entry", async () => {
+  for (const service of ["previous_slide", "next_slide"]) {
+    const controls = Object.create(PhotoControls.prototype);
+    controls._state = { entryId: "selected-entry" };
+    const phases = [];
+    const requests = [];
+    controls._onNavigate = (...args) => phases.push(args);
+    controls._runAction = async action => { await action(); return true; };
+    controls._getHass = () => ({ callWS: async request => {
+      requests.push(request);
+      controls._state.entryId = "another-entry";
+      return {};
+    } });
+    assert.equal(await controls._navigate(service), true);
+    assert.equal(JSON.stringify(requests), JSON.stringify([{
+      type: "call_service", domain: "album_slideshow", service,
+      service_data: { entry_id: "selected-entry" },
+    }]));
+    assert.deepEqual(phases, [["start", "selected-entry"], ["complete", "selected-entry"]]);
+  }
+});
+
+test("navigation failure and busy state do not leave a frame override active", async () => {
+  const controls = Object.create(PhotoControls.prototype);
+  controls._state = { entryId: "test" };
+  const phases = [];
+  controls._onNavigate = (...args) => phases.push(args);
+  controls._run = async () => false;
+  assert.equal(await controls._navigate("next_slide"), false);
+  assert.deepEqual(phases, [["start", "test"], ["failed", "test"]]);
+  controls._busy = true;
+  assert.equal(await controls._navigate("next_slide"), false);
+  assert.equal(phases.length, 2);
+});
+
+test("pause and resume use the existing renamed switch without optimistic state", async () => {
+  for (const paused of [false, true]) {
+    const controls = Object.create(PhotoControls.prototype);
+    controls._state = { entryId: "test-entry", paused };
+    const requests = [];
+    controls._runAction = async action => { await action(); return true; };
+    controls._getHass = () => ({ callWS: async request => {
+      requests.push(request);
+      if (request.type === "config/entity_registry/list") return [
+        { config_entry_id: "different-entry", unique_id: "different-entry_paused", entity_id: "switch.other" },
+        { config_entry_id: "test-entry", unique_id: "test-entry_paused", entity_id: "switch.custom_pause_name", disabled_by: null },
+      ];
+      return {};
+    } });
+    assert.equal(await controls._togglePause(), true);
+    assert.equal(JSON.stringify(requests[1]), JSON.stringify({
+      type: "call_service", domain: "switch", service: paused ? "turn_off" : "turn_on",
+      service_data: { entity_id: "switch.custom_pause_name" },
+    }));
+    assert.equal(controls._state.paused, paused);
+  }
+});
+
+test("missing or disabled pause switch cannot target a different entry", async () => {
+  for (const disabled of [true, false]) {
+    const controls = Object.create(PhotoControls.prototype);
+    controls._state = { entryId: "test-entry", paused: false };
+    controls._runAction = action => action();
+    let serviceCalls = 0;
+    controls._getHass = () => ({ callWS: async request => {
+      if (request.type === "config/entity_registry/list") return disabled ? [{
+        config_entry_id: "test-entry", unique_id: "test-entry_paused",
+        entity_id: "switch.disabled", disabled_by: "user",
+      }] : [];
+      serviceCalls += 1;
+    } });
+    await assert.rejects(controls._togglePause(), /pause switch is unavailable/);
+    assert.equal(serviceCalls, 0);
+  }
+});
+
+test("toolbar availability and pause icon follow reported HA state", () => {
+  const controls = Object.create(PhotoControls.prototype);
+  const elements = new Map();
+  for (const id of ["previous", "next", "pause", "hide", "undo", "manage"]) {
+    const icon = { setAttribute(name, value) { this[name] = value; } };
+    elements.set(id, {
+      setAttribute(name, value) { this[name] = value; },
+      querySelector() { return icon; },
+    });
+  }
+  controls._root = { getElementById: id => elements.get(id) };
+  controls._state = {};
+  const state = { entryId: "test", photoIds: ["photo"], paused: false, canPrevious: false, canNext: true };
+  controls.update(state);
+  assert.equal(elements.get("previous").disabled, true);
+  assert.equal(elements.get("next").disabled, false);
+  assert.equal(elements.get("pause").title, "Pause slideshow");
+  assert.equal(elements.get("pause").querySelector().icon, "mdi:pause");
+  controls.update({ ...state, paused: true, canPrevious: true });
+  assert.equal(elements.get("previous").disabled, false);
+  assert.equal(elements.get("pause")["aria-label"], "Resume slideshow");
+  assert.equal(elements.get("pause").querySelector().icon, "mdi:play");
+  controls._busy = true;
+  controls.update(state);
+  assert.ok([...elements.values()].every(element => element.disabled));
+  controls._busy = false;
+  controls.update({ entryId: "test", paused: true, canNext: false, canPrevious: false });
+  assert.equal(elements.get("next").disabled, true);
+  assert.equal(elements.get("pause").disabled, false);
+  assert.equal(elements.get("manage").disabled, false);
+});
+
+test("the editor keeps Refresh but avoids duplicate navigation buttons", () => {
+  const Editor = vm.runInContext("createAlbumSlideshowCardEditorClass(class { attachShadow() {} })", context);
+  const editor = new Editor();
+  const wrap = { querySelectorAll: () => [] };
+  editor.shadowRoot = { querySelector: () => wrap };
+  editor._config = { entity: "camera.test" };
+  editor._siblings = { previous_button: "button.previous", next_button: "button.next", refresh_button: "button.refresh" };
+  editor._hass = { states: { "camera.test": { attributes: { entry_id: "test" } } } };
+  editor._renderActions();
+  assert.ok(wrap.innerHTML.includes("Refresh album"));
+  assert.ok(!wrap.innerHTML.includes("Previous slide"));
+  assert.ok(!wrap.innerHTML.includes("Next slide"));
+  delete editor._hass.states["camera.test"].attributes.entry_id;
+  editor._renderActions();
+  assert.ok(wrap.innerHTML.includes("Previous slide"));
+  assert.ok(wrap.innerHTML.includes("Next slide"));
+});
+
+function navigationCardFixture() {
+  const clock = revealFixture();
+  const requests = [];
+  context.Image = class { constructor() { requests.push(this); } };
+  const card = Object.create(Card.prototype);
+  card._config = { entity: "camera.test", fit: "contain" };
+  card._controlsReveal = { holding: true };
+  card._displayedPhotoIds = ["old-photo"];
+  card._displayedFrameId = 1;
+  card._lastFrameId = 1;
+  card._lastEntityPicture = "/photo.jpg?frame=1";
+  card._loadGeneration = 0;
+  card._hiddenRevision = 0;
+  const attrs = { entry_id: "test", frame_id: 1, hidden_revision: 0, displayed_photo_ids: ["old-photo"], entity_picture: "/photo.jpg?frame=1" };
+  card._hass = { states: { "camera.test": { attributes: attrs } } };
+  card._performSwap = () => {};
+  const advance = frameId => {
+    Object.assign(attrs, { frame_id: frameId, entity_picture: `/photo.jpg?frame=${frameId}`, displayed_photo_ids: [`photo-${frameId}`] });
+    card._maybeSwap();
+  };
+  return { card, attrs, requests, advance, clock };
+}
+
+test("explicit navigation bypasses the toolbar hold then holds the new frame", () => {
+  for (const responseFirst of [false, true]) {
+    const { card, requests, advance, clock } = navigationCardFixture();
+    card._holdSwapsUntil = Infinity;
+    card._controlNavigation("start", "test");
+    assert.equal(card._holdSwapsUntil, 0);
+    if (responseFirst) card._controlNavigation("complete", "test");
+    advance(2);
+    assert.equal(requests.length, 1);
+    requests[0].onload();
+    assert.equal(card._displayedFrameId, 2);
+    if (!responseFirst) card._controlNavigation("complete", "test");
+    assert.equal(card._navigationRequest, null);
+    advance(3);
+    assert.equal(requests.length, 1);
+    assert.equal(card._displayedFrameId, 2);
+    assert.equal(card._controlsReveal.holding, true);
+    clock.advance(5000);
+    assert.equal(card._navigationRequest, null);
+  }
+});
+
+test("failed or unchanged navigation restores the normal frame hold", () => {
+  for (const phase of ["failed", "complete"]) {
+    const { card, requests, advance, clock } = navigationCardFixture();
+    card._controlNavigation("start", "test");
+    card._controlNavigation(phase, "test");
+    clock.advance(5000);
+    assert.equal(card._navigationRequest, null);
+    advance(2);
+    assert.equal(requests.length, 0);
+  }
+});
+
+test("navigation override ignores a different entry and is cleared on disconnect", () => {
+  const { card, clock } = navigationCardFixture();
+  card._controlNavigation("start", "other-entry");
+  assert.equal(card._navigationRequest, undefined);
+  card._controlNavigation("start", "test");
+  card._controlNavigation("complete", "test");
+  card._controlsReveal.dispose = () => {};
+  card.disconnectedCallback();
+  clock.advance(5000);
+  assert.equal(card._navigationRequest, null);
+  assert.equal(card._navigationTimer, null);
+});
+
 test("paired hide choices retain IDs when the slideshow advances", () => {
   const controls = Object.create(PhotoControls.prototype);
   controls._state = { entryId: "test", photoIds: ["left", "right"], orientation: "horizontal" };

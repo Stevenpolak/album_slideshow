@@ -106,21 +106,23 @@ function isAlbumSlideshowCamera(state) {
 }
 
 class PhotoControls {
-  constructor(container, getHass, onActivity = () => {}) {
+  constructor(container, getHass, onActivity = () => {}, onNavigate = () => {}) {
     this._getHass = getHass;
     this._onActivity = onActivity;
+    this._onNavigate = onNavigate;
     this._state = {};
     this._busy = false;
     this._root = container.attachShadow({ mode: "open" });
     this._root.innerHTML = `
       <style>
-        :host { display: block; font-family: var(--paper-font-body1_-_font-family, sans-serif); }
+        :host { display: block; max-width: 100%; font-family: var(--paper-font-body1_-_font-family, sans-serif); }
         :host([hidden]) { display: none !important; }
         button { font: inherit; color: inherit; cursor: pointer; border: 0; border-radius: 6px; background: var(--secondary-background-color, #eee); padding: 8px 12px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; }
         button:hover { filter: brightness(.94); }
         button:disabled { opacity: .4; cursor: default; }
         button:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
-        .toolbar { display: flex; gap: 4px; padding: 4px; border-radius: 6px; background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); }
+        .toolbar { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); width: 300px; max-width: 100%; box-sizing: border-box; gap: 4px 12px; padding: 4px; border-radius: 6px; background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); }
+        .control-group { display: flex; gap: 4px; justify-content: center; }
         .icon { width: 44px; height: 44px; padding: 10px; flex: 0 0 44px; }
         ha-icon { --mdc-icon-size: 22px; }
         dialog { box-sizing: border-box; width: min(460px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: min(640px, calc(100dvh - 40px)); border: 1px solid var(--divider-color, #ddd); border-radius: 8px; padding: 16px; font-size: 14px; background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); }
@@ -137,9 +139,16 @@ class PhotoControls {
         [hidden] { display: none !important; }
       </style>
       <div class="toolbar">
-        <button type="button" class="icon" id="hide" title="Hide photo" aria-label="Hide photo"><ha-icon icon="mdi:eye-off"></ha-icon></button>
-        <button type="button" class="icon" id="undo" title="Undo hide" aria-label="Undo hide"><ha-icon icon="mdi:undo"></ha-icon></button>
-        <button type="button" class="icon" id="manage" title="Hidden photos" aria-label="Hidden photos"><ha-icon icon="mdi:image-off-outline"></ha-icon></button>
+        <div class="control-group" role="group" aria-label="Slideshow navigation">
+          <button type="button" class="icon" id="previous" title="Previous slide" aria-label="Previous slide"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
+          <button type="button" class="icon" id="pause" title="Pause slideshow" aria-label="Pause slideshow"><ha-icon icon="mdi:pause"></ha-icon></button>
+          <button type="button" class="icon" id="next" title="Next slide" aria-label="Next slide"><ha-icon icon="mdi:skip-next"></ha-icon></button>
+        </div>
+        <div class="control-group" role="group" aria-label="Photo visibility">
+          <button type="button" class="icon" id="hide" title="Hide photo" aria-label="Hide photo"><ha-icon icon="mdi:eye-off"></ha-icon></button>
+          <button type="button" class="icon" id="undo" title="Undo hide" aria-label="Undo hide"><ha-icon icon="mdi:undo"></ha-icon></button>
+          <button type="button" class="icon" id="manage" title="Hidden photos" aria-label="Hidden photos"><ha-icon icon="mdi:image-off-outline"></ha-icon></button>
+        </div>
       </div>
       <div id="error" class="error" role="alert" hidden></div>
       <dialog aria-labelledby="title">
@@ -151,6 +160,9 @@ class PhotoControls {
     this._dialog = this._root.querySelector("dialog");
     this._dialog.addEventListener("close", () => this._onActivity());
     container.addEventListener("click", (event) => event.stopPropagation());
+    this._root.getElementById("previous").addEventListener("click", () => this._navigate("previous_slide"));
+    this._root.getElementById("next").addEventListener("click", () => this._navigate("next_slide"));
+    this._root.getElementById("pause").addEventListener("click", () => this._togglePause());
     this._root.getElementById("hide").addEventListener("click", () => this._hide());
     this._root.getElementById("undo").addEventListener("click", () => this._run("undo_hide"));
     this._root.getElementById("manage").addEventListener("click", () => this._showHidden(0));
@@ -170,6 +182,14 @@ class PhotoControls {
       this._dialog.close();
     }
     this._state = { ...state, photoIds: [...(state.photoIds || [])] };
+    const unavailable = this._busy || !state.entryId;
+    this._root.getElementById("previous").disabled = unavailable || !state.canPrevious;
+    this._root.getElementById("next").disabled = unavailable || !state.canNext;
+    const pause = this._root.getElementById("pause");
+    pause.disabled = unavailable || typeof state.paused !== "boolean";
+    pause.title = state.paused ? "Resume slideshow" : "Pause slideshow";
+    pause.setAttribute("aria-label", pause.title);
+    pause.querySelector("ha-icon").setAttribute("icon", state.paused ? "mdi:play" : "mdi:pause");
     this._root.getElementById("hide").disabled = this._busy || !state.entryId || !this._state.photoIds.some(Boolean);
     this._root.getElementById("undo").disabled = this._busy || !state.entryId || !state.canUndo;
     this._root.getElementById("manage").disabled = this._busy || !state.entryId;
@@ -177,7 +197,7 @@ class PhotoControls {
   }
 
   async _call(service, data = {}, entryId = this._state.entryId) {
-    if (!entryId) throw new Error("This slideshow does not support photo exclusions");
+    if (!entryId) throw new Error("This slideshow does not support these controls");
     const result = await this._getHass().callWS({
       type: "call_service",
       domain: "album_slideshow",
@@ -186,6 +206,37 @@ class PhotoControls {
       ...(service === "list_hidden_photos" ? { return_response: true } : {}),
     });
     return result?.response;
+  }
+
+  async _navigate(service) {
+    if (this._busy || !this._state.entryId) return false;
+    const entryId = this._state.entryId;
+    this._onNavigate?.("start", entryId);
+    const success = await this._run(service, {}, entryId);
+    this._onNavigate?.(success ? "complete" : "failed", entryId);
+    return success;
+  }
+
+  async _togglePause() {
+    const { entryId, paused } = this._state;
+    if (!entryId || typeof paused !== "boolean") return false;
+    return this._runAction(async () => {
+      const hass = this._getHass();
+      const registry = await hass.callWS({ type: "config/entity_registry/list" });
+      const entity = registry.find((candidate) =>
+        candidate.config_entry_id === entryId &&
+        candidate.unique_id === `${entryId}_paused` &&
+        candidate.entity_id.startsWith("switch.") &&
+        !candidate.disabled_by,
+      );
+      if (!entity) throw new Error("The pause switch is unavailable for this slideshow");
+      await hass.callWS({
+        type: "call_service",
+        domain: "switch",
+        service: paused ? "turn_off" : "turn_on",
+        service_data: { entity_id: entity.entity_id },
+      });
+    });
   }
 
   _error(message = "") {
@@ -197,6 +248,10 @@ class PhotoControls {
   }
 
   async _run(service, data = {}, entryId = this._state.entryId) {
+    return this._runAction(() => this._call(service, data, entryId));
+  }
+
+  async _runAction(action) {
     if (this._busy) return false;
     this._busy = true;
     this._onActivity?.();
@@ -205,7 +260,7 @@ class PhotoControls {
     const buttons = [...this._dialog.querySelectorAll("#content button")].map((button) => ({ button, disabled: button.disabled }));
     buttons.forEach(({ button }) => { button.disabled = true; });
     try {
-      await this._call(service, data, entryId);
+      await action();
       this._dialog.close();
       return true;
     } catch (error) {
@@ -525,6 +580,9 @@ function createAlbumSlideshowCardClass(Base) {
     this._holdSwapTimer = null;
     this._loadGeneration = 0;
     this._displayedPhotoIds = [];
+    this._displayedFrameId = null;
+    this._navigationRequest = null;
+    this._navigationTimer = null;
     this._photoEntryId = null;
     this._hiddenRevision = undefined;
   }
@@ -632,6 +690,7 @@ function createAlbumSlideshowCardClass(Base) {
   }
 
   disconnectedCallback() {
+    this._cancelControlNavigation();
     this._controlsReveal?.dispose();
     this._controlsReveal = null;
     clearTimeout(this._holdSwapTimer);
@@ -663,10 +722,12 @@ function createAlbumSlideshowCardClass(Base) {
 
   _renderShell() {
     const c = this._config;
+    this._cancelControlNavigation();
     this._controlsReveal?.dispose();
     this._controlsReveal = null;
     this._loadGeneration += 1;
     this._displayedPhotoIds = [];
+    this._displayedFrameId = null;
     this._photoEntryId = null;
     this._hiddenRevision = undefined;
     const aspect = c.aspect_ratio === "auto" ? "auto" : c.aspect_ratio;
@@ -761,7 +822,7 @@ function createAlbumSlideshowCardClass(Base) {
           font-family: var(--paper-font-body1_-_font-family, sans-serif);
         }
         .cap-line { font-weight: inherit; }
-        #photo-controls { position: absolute; right: 8px; ${c.caption?.position.startsWith("top") ? "bottom" : "top"}: 8px; z-index: 3; }
+        #photo-controls { position: absolute; right: 8px; max-width: calc(100% - 16px); ${c.caption?.position.startsWith("top") ? "bottom" : "top"}: 8px; z-index: 3; }
         .cap-box.cap-shadow {
           text-shadow:
             0 1px 2px rgba(0, 0, 0, 0.9),
@@ -784,6 +845,7 @@ function createAlbumSlideshowCardClass(Base) {
     this._photoControls = new PhotoControls(
       this.shadowRoot.getElementById("photo-controls"), () => this._hass,
       () => this._controlsReveal?.activity(),
+      (phase, entryId) => this._controlNavigation(phase, entryId),
     );
     const card = this.shadowRoot.querySelector("ha-card");
     if (this._config.tap_action === "more-info") {
@@ -807,6 +869,36 @@ function createAlbumSlideshowCardClass(Base) {
         this._controlsReveal = new PhotoControlsReveal(card, container, this._photoControls, () => this._maybeSwap());
       }
     }
+  }
+
+  _cancelControlNavigation() {
+    clearTimeout(this._navigationTimer);
+    this._navigationTimer = null;
+    this._navigationRequest = null;
+  }
+
+  _controlNavigation(phase, entryId) {
+    const attrs = this._hass?.states[this._config.entity]?.attributes || {};
+    if (attrs.entry_id !== entryId) return;
+    if (phase === "start") {
+      this._cancelControlNavigation();
+      this._navigationRequest = { entryId, frameId: attrs.frame_id, pending: true };
+      this._holdSwapsUntil = 0;
+      clearTimeout(this._holdSwapTimer);
+      this._holdSwapTimer = null;
+    } else if (this._navigationRequest?.entryId === entryId) {
+      if (phase === "failed") {
+        this._cancelControlNavigation();
+      } else {
+        this._navigationRequest.pending = false;
+        if (this._displayedFrameId !== this._navigationRequest.frameId && this._displayedFrameId === attrs.frame_id) {
+          this._cancelControlNavigation();
+        } else {
+          this._navigationTimer = setTimeout(() => this._cancelControlNavigation(), 5000);
+        }
+      }
+    }
+    this._maybeSwap();
   }
 
   _transitionStyles() {
@@ -887,7 +979,7 @@ function createAlbumSlideshowCardClass(Base) {
       this._setPlaceholder(attrs.empty_reason === "all_hidden" ? "All photos hidden" : attrs.empty_reason ? "No matching photos" : "Preparing next photo...");
       return;
     }
-    if (this._controlsReveal?.holding && this._displayedPhotoIds.length) return;
+    if (this._controlsReveal?.holding && this._displayedPhotoIds.length && !this._navigationRequest) return;
     // Hold visual swaps for the configured grace period after a tap.
     // The state cursor (`_lastFrameId`/`_lastEntityPicture`) is left
     // untouched during the hold; once the hold expires we re-enter
@@ -957,6 +1049,7 @@ function createAlbumSlideshowCardClass(Base) {
   _clearDisplayedPhotos() {
     this._loadGeneration += 1;
     this._displayedPhotoIds = [];
+    this._displayedFrameId = null;
     this._lastFrameId = null;
     this._lastEntityPicture = null;
     this._holdSwapsUntil = 0;
@@ -978,6 +1071,9 @@ function createAlbumSlideshowCardClass(Base) {
       orientation: this._photoOrientation,
       hiddenCount: attrs.hidden_photo_count,
       canUndo: attrs.undo_hide_available,
+      canPrevious: attrs.previous_frames_cached > 0,
+      canNext: attrs.media_count > 0,
+      paused: attrs.paused,
     });
   }
 
@@ -988,7 +1084,7 @@ function createAlbumSlideshowCardClass(Base) {
     next.decoding = "async";
     next.onload = () => {
       if (generation !== this._loadGeneration) return;
-      if (this._controlsReveal?.holding && this._displayedPhotoIds.length) {
+      if (this._controlsReveal?.holding && this._displayedPhotoIds.length && !this._navigationRequest) {
         this._lastFrameId = null;
         this._lastEntityPicture = null;
         return;
@@ -1000,9 +1096,13 @@ function createAlbumSlideshowCardClass(Base) {
         return;
       }
       this._displayedPhotoIds = [...photoData.photoIds];
+      this._displayedFrameId = photoData.frameId;
       this._photoEntryId = photoData.entryId;
       this._photoOrientation = photoData.orientation;
       this._performSwap(url, fit, blurBackdrop, captionData);
+      if (this._navigationRequest && !this._navigationRequest.pending && photoData.frameId !== this._navigationRequest.frameId) {
+        this._cancelControlNavigation();
+      }
       this._refreshPhotoControls(attrs);
     };
     next.onerror = () => {
@@ -2082,13 +2182,17 @@ function createAlbumSlideshowCardEditorClass(Base) {
       orientation: attrs.pair_orientation,
       hiddenCount: attrs.hidden_photo_count,
       canUndo: attrs.undo_hide_available,
+      canPrevious: attrs.previous_frames_cached > 0,
+      canNext: attrs.media_count > 0,
+      paused: attrs.paused,
     });
   }
 
   _renderActions() {
     const wrap = this.shadowRoot.querySelector(".actions");
     if (!wrap) return;
-    if (!this._hasActions()) {
+    const hasToolbarNavigation = !!this._hass?.states[this._config?.entity]?.attributes?.entry_id;
+    if (!this._hasActions() || (hasToolbarNavigation && !this._siblings.refresh_button)) {
       wrap.hidden = true;
       wrap.innerHTML = "";
       return;
@@ -2098,8 +2202,8 @@ function createAlbumSlideshowCardEditorClass(Base) {
     wrap.innerHTML = `
       <div class="actions-title">Actions</div>
       <div class="actions-row">
-        ${s.previous_button ? `<button class="act" data-act="previous">Previous slide</button>` : ""}
-        ${s.next_button ? `<button class="act" data-act="next">Next slide</button>` : ""}
+        ${s.previous_button && !hasToolbarNavigation ? `<button class="act" data-act="previous">Previous slide</button>` : ""}
+        ${s.next_button && !hasToolbarNavigation ? `<button class="act" data-act="next">Next slide</button>` : ""}
         ${s.refresh_button ? `<button class="act" data-act="refresh">Refresh album</button>` : ""}
       </div>
     `;
