@@ -129,10 +129,26 @@ persist across restarts and album refreshes, and apply to every card using that
 slideshow's camera. Other configured slideshows are unaffected.
 
 In the card editor, use the hide, undo, and hidden-photo management controls
-below the form. To put these controls on the displayed card as well, enable
-**Interaction > Show photo controls** (`photo_controls: true`). This is off by
-default. Paired slides offer explicit **left/right** or **top/bottom** choices,
-plus **Hide both photos**.
+below the form. For controls on the displayed card, choose
+**Interaction > Photo controls**:
+
+| Mode | Behavior |
+|------|----------|
+| **Off** (default) | No controls on the displayed card; they remain available in the editor |
+| **On demand** | Hold the photo for half a second to reveal the toolbar; desktop hover or keyboard focus also reveals it |
+| **Always** | Keep the toolbar visible |
+
+With **On demand**, the displayed photo stays steady while choosing an action.
+The toolbar dismisses after five seconds of inactivity, a click outside the card,
+or Escape. It stays open while a dialog or action is active, or while it has
+keyboard focus. Normal taps keep their configured behavior; a long press only
+reveals controls and never hides a photo by itself. Scrolling cancels a pending
+long press. Exclusion updates can still clear a held photo immediately.
+
+For YAML, use `photo_controls: off`, `on_demand`, or `always`. Existing
+`photo_controls: true` settings still mean Always, and `false` still means Off.
+Paired slides offer explicit **left/right** or **top/bottom** choices, plus
+**Hide both photos**.
 
 **Undo hide** restores the last hide action, including both photos if they were
 hidden together. **Hidden photos** opens a paginated list where individual photos
@@ -801,7 +817,7 @@ fit: auto                   # auto | cover | contain
                             # auto inherits the camera's fill_mode (cover / contain / blur)
 background: '#000'          # color shown behind contained images
 tap_action: none            # none | more-info
-photo_controls: false
+photo_controls: on_demand
 caption:                    # overlay the photo's date, location and/or description
   show: [date, location]    #   any of: date, location, description (order = display order)
   position: bottom-left     #   top/center/bottom + -left/-center/-right, or center

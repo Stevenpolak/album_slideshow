@@ -46,6 +46,19 @@ const TRANSITIONS = new Set(["random", "none", ...ANIMATED_TRANSITIONS]);
 
 const FIT_MODES = new Set(["auto", "cover", "contain"]);
 
+const PHOTO_CONTROL_OPTIONS = [
+  { value: "off", label: "Off" },
+  { value: "on_demand", label: "On demand" },
+  { value: "always", label: "Always" },
+];
+
+function normalizePhotoControls(value) {
+  if (value == null || value === false) return "off";
+  if (value === true) return "always";
+  if (PHOTO_CONTROL_OPTIONS.some((option) => option.value === value)) return value;
+  throw new Error(`album-slideshow-card: unknown photo controls mode '${value}'`);
+}
+
 // Caption overlay (date / location / description). ``show`` is an ordered
 // subset of these fields; ``position`` is one of a 3x3 anchor grid;
 // ``date_format`` is one of the named presets below or a custom token string.
@@ -93,8 +106,9 @@ function isAlbumSlideshowCamera(state) {
 }
 
 class PhotoControls {
-  constructor(container, getHass) {
+  constructor(container, getHass, onActivity = () => {}) {
     this._getHass = getHass;
+    this._onActivity = onActivity;
     this._state = {};
     this._busy = false;
     this._root = container.attachShadow({ mode: "open" });
@@ -135,11 +149,20 @@ class PhotoControls {
       </dialog>
     `;
     this._dialog = this._root.querySelector("dialog");
+    this._dialog.addEventListener("close", () => this._onActivity());
     container.addEventListener("click", (event) => event.stopPropagation());
     this._root.getElementById("hide").addEventListener("click", () => this._hide());
     this._root.getElementById("undo").addEventListener("click", () => this._run("undo_hide"));
     this._root.getElementById("manage").addEventListener("click", () => this._showHidden(0));
     this._root.getElementById("close").addEventListener("click", () => this._dialog.close());
+  }
+
+  get active() {
+    return this._busy || this._dialog.open;
+  }
+
+  close() {
+    this._dialog.close();
   }
 
   update(state) {
@@ -176,6 +199,7 @@ class PhotoControls {
   async _run(service, data = {}, entryId = this._state.entryId) {
     if (this._busy) return false;
     this._busy = true;
+    this._onActivity?.();
     this._error();
     this.update(this._state);
     const buttons = [...this._dialog.querySelectorAll("#content button")].map((button) => ({ button, disabled: button.disabled }));
@@ -191,6 +215,7 @@ class PhotoControls {
       this._busy = false;
       this.update(this._state);
       buttons.forEach(({ button, disabled }) => { button.disabled = disabled; });
+      this._onActivity?.();
     }
   }
 
@@ -215,6 +240,7 @@ class PhotoControls {
     const content = this._root.getElementById("content");
     content.replaceChildren();
     if (!this._dialog.open) this._dialog.showModal();
+    this._onActivity?.();
     return content;
   }
 
@@ -297,6 +323,162 @@ class PhotoControls {
   }
 }
 
+class PhotoControlsReveal {
+  constructor(card, container, controls, resume) {
+    this._card = card;
+    this._container = container;
+    this._controls = controls;
+    this._resume = resume;
+    this._visible = false;
+    this._pointer = null;
+    this._listeners = [];
+    container.hidden = true;
+    this._listen(card, "pointerenter", (event) => {
+      if (event.pointerType === "mouse") this.show();
+    });
+    this._listen(card, "pointerleave", () => {
+      this._cancelPress();
+      this.activity();
+    });
+    this._listen(card, "pointerdown", (event) => this._pointerDown(event));
+    this._listen(card, "pointermove", (event) => this._pointerMove(event));
+    this._listen(card, "pointerup", () => { this._cancelPress(); this.activity(); });
+    this._listen(card, "pointercancel", () => { this._cancelPress(); this.activity(); });
+    this._listen(card, "click", (event) => {
+      if (event.composedPath().includes(container)) {
+        this._suppressClick = false;
+        this.activity();
+      } else if (this._suppressClick && event.detail !== 0) {
+        this._suppressClick = false;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, true);
+    this._listen(card, "contextmenu", (event) => {
+      if (this._suppressClick || (this._pointer && this._pointer.type !== "mouse")) {
+        event.preventDefault();
+        event.stopPropagation();
+        this._suppressClick = true;
+        this.show();
+      }
+    });
+    this._listen(card, "focusin", (event) => {
+      if (!this._ignoreFocus && event.composedPath()[0]?.matches?.(":focus-visible")) this.show();
+      else this.activity();
+    });
+    this._listen(card, "focusout", () => this.activity());
+    this._listen(card, "keydown", (event) => this._keyDown(event));
+    this._listen(card.ownerDocument, "pointerdown", (event) => {
+      if (!event.composedPath().includes(card)) this.hide();
+    }, true);
+  }
+
+  get holding() {
+    return !this._disposed && (this._visible || this._pointer !== null);
+  }
+
+  _listen(target, type, listener, capture = false) {
+    target.addEventListener(type, listener, capture);
+    this._listeners.push(() => target.removeEventListener(type, listener, capture));
+  }
+
+  show() {
+    if (this._disposed) return;
+    this._visible = true;
+    this._container.hidden = false;
+    this.activity();
+  }
+
+  hide() {
+    if (this._disposed || this._controls.active) return;
+    const wasHolding = this.holding;
+    this._visible = false;
+    this._container.hidden = true;
+    clearTimeout(this._idleTimer);
+    this._idleTimer = null;
+    this._cancelPress(false);
+    if (wasHolding) this._resume();
+  }
+
+  activity() {
+    if (this._disposed || !this._visible) return;
+    clearTimeout(this._idleTimer);
+    this._idleTimer = setTimeout(() => {
+      this._idleTimer = null;
+      if (this._controls.active || this._pointer || this._keyboardFocused()) return;
+      this.hide();
+    }, 5000);
+  }
+
+  _keyboardFocused() {
+    return this._card.matches(":focus-visible") || Boolean(this._container.shadowRoot?.querySelector(":focus-visible"));
+  }
+
+  _pointerDown(event) {
+    if (event.composedPath().includes(this._container)) {
+      this.activity();
+      return;
+    }
+    this._suppressClick = false;
+    if (event.isPrimary === false || event.button > 0) {
+      this._cancelPress();
+      return;
+    }
+    this._cancelPress(false);
+    this._pointer = { id: event.pointerId, type: event.pointerType, x: event.clientX, y: event.clientY };
+    this._pressTimer = setTimeout(() => {
+      this._pressTimer = null;
+      if (!this._pointer || this._disposed) return;
+      this._suppressClick = true;
+      this.show();
+    }, 500);
+  }
+
+  _pointerMove(event) {
+    if (this._pointer) {
+      if (event.pointerId === this._pointer.id && Math.hypot(event.clientX - this._pointer.x, event.clientY - this._pointer.y) > 10) this._cancelPress();
+    } else if (event.pointerType === "mouse") {
+      this.show();
+    }
+  }
+
+  _cancelPress(resume = true) {
+    const wasPressed = this._pointer !== null;
+    clearTimeout(this._pressTimer);
+    this._pressTimer = null;
+    this._pointer = null;
+    if (resume && wasPressed && !this._visible && !this._disposed) this._resume();
+  }
+
+  _keyDown(event) {
+    if (event.key === "Escape" && this._visible && !this._controls.active) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.hide();
+      this._ignoreFocus = true;
+      this._card.focus({ preventScroll: true });
+      this._ignoreFocus = false;
+    } else if ((event.key === "Enter" || event.key === " ") && event.composedPath()[0] === this._card) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.show();
+      this._container.shadowRoot?.querySelector("button:not([disabled])")?.focus();
+    } else {
+      this.activity();
+    }
+  }
+
+  dispose() {
+    this._disposed = true;
+    clearTimeout(this._idleTimer);
+    this._cancelPress(false);
+    this._listeners.forEach((remove) => remove());
+    this._listeners = [];
+    this._controls.close();
+    this._visible = false;
+  }
+}
+
 // The card class is built lazily by a factory so the base class can be
 // resolved from the *live* ``window.HTMLElement`` at registration time.
 // See ``defineAlbumSlideshowCards`` for why this matters with the
@@ -373,7 +555,7 @@ function createAlbumSlideshowCardClass(Base) {
       // Empty/missing background means inherit theme.
       background: typeof config.background === "string" ? config.background : "",
       tap_action: config.tap_action === "more-info" ? "more-info" : "none",
-      photo_controls: config.photo_controls === true,
+      photo_controls: normalizePhotoControls(config.photo_controls),
       // Number of seconds the card freezes its visible slide after a
       // tap, so the more-info dialog can settle without the slideshow
       // marching forward beneath it. Set to 0 to disable.
@@ -442,7 +624,20 @@ function createAlbumSlideshowCardClass(Base) {
     if (!this._rendered) {
       this._renderShell();
       this._rendered = true;
+    } else {
+      this._setupPhotoControlsReveal();
     }
+    this._maybeSwap();
+  }
+
+  disconnectedCallback() {
+    this._controlsReveal?.dispose();
+    this._controlsReveal = null;
+    clearTimeout(this._holdSwapTimer);
+    this._holdSwapTimer = null;
+    this._loadGeneration += 1;
+    this._lastFrameId = null;
+    this._lastEntityPicture = null;
   }
 
   set hass(hass) {
@@ -467,6 +662,8 @@ function createAlbumSlideshowCardClass(Base) {
 
   _renderShell() {
     const c = this._config;
+    this._controlsReveal?.dispose();
+    this._controlsReveal = null;
     this._loadGeneration += 1;
     this._displayedPhotoIds = [];
     this._photoEntryId = null;
@@ -489,6 +686,7 @@ function createAlbumSlideshowCardClass(Base) {
           position: relative;
           padding: 0;
         }
+        ha-card:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
         .stage {
           position: absolute;
           inset: 0;
@@ -497,6 +695,7 @@ function createAlbumSlideshowCardClass(Base) {
           background: ${stageBg};
           border-radius: inherit;
           overflow: hidden;
+          ${c.photo_controls === "on_demand" ? "-webkit-touch-callout: none; user-select: none;" : ""}
         }
         .blur-bg {
           position: absolute;
@@ -578,16 +777,34 @@ function createAlbumSlideshowCardClass(Base) {
           <div class="captions" id="captions" aria-hidden="true"></div>
           <div class="placeholder" id="placeholder">Waiting for first frame...</div>
         </div>
-        <div id="photo-controls" ${c.photo_controls ? "" : "hidden"}></div>
+        <div id="photo-controls" ${c.photo_controls === "always" ? "" : "hidden"}></div>
       </ha-card>
     `;
     this._photoControls = new PhotoControls(
       this.shadowRoot.getElementById("photo-controls"), () => this._hass,
+      () => this._controlsReveal?.activity(),
     );
     const card = this.shadowRoot.querySelector("ha-card");
     if (this._config.tap_action === "more-info") {
       card.addEventListener("click", () => this._fireMoreInfo());
       card.style.cursor = "pointer";
+    }
+    this._setupPhotoControlsReveal();
+  }
+
+  _setupPhotoControlsReveal() {
+    this._controlsReveal?.dispose();
+    this._controlsReveal = null;
+    const card = this.shadowRoot.querySelector("ha-card");
+    const container = this.shadowRoot.getElementById("photo-controls");
+    container.hidden = this._config.photo_controls !== "always";
+    if (this._config.photo_controls === "on_demand") {
+      card.tabIndex = 0;
+      card.setAttribute("role", "group");
+      card.setAttribute("aria-label", "Slideshow photo controls");
+      if (this.isConnected) {
+        this._controlsReveal = new PhotoControlsReveal(card, container, this._photoControls, () => this._maybeSwap());
+      }
     }
   }
 
@@ -669,6 +886,7 @@ function createAlbumSlideshowCardClass(Base) {
       this._setPlaceholder(attrs.empty_reason === "all_hidden" ? "All photos hidden" : attrs.empty_reason ? "No matching photos" : "Preparing next photo...");
       return;
     }
+    if (this._controlsReveal?.holding && this._displayedPhotoIds.length) return;
     // Hold visual swaps for the configured grace period after a tap.
     // The state cursor (`_lastFrameId`/`_lastEntityPicture`) is left
     // untouched during the hold; once the hold expires we re-enter
@@ -769,6 +987,11 @@ function createAlbumSlideshowCardClass(Base) {
     next.decoding = "async";
     next.onload = () => {
       if (generation !== this._loadGeneration) return;
+      if (this._controlsReveal?.holding && this._displayedPhotoIds.length) {
+        this._lastFrameId = null;
+        this._lastEntityPicture = null;
+        return;
+      }
       const attrs = this._hass.states[this._config.entity]?.attributes || {};
       if (photoData.entityId !== this._config.entity || (attrs.frame_id ?? null) !== photoData.frameId || attrs.hidden_revision !== photoData.hiddenRevision) {
         this._lastFrameId = null;
@@ -1214,7 +1437,7 @@ const CAPTION_DATE_FORMAT_OPTIONS = [
 ];
 
 const DEFAULTS = {
-  photo_controls: false,
+  photo_controls: "off",
   transition: "random",
   duration: 600,
   easing: "ease-in-out",
@@ -1559,7 +1782,10 @@ function createAlbumSlideshowCardEditorClass(Base) {
         title: "Interaction",
         icon: "mdi:gesture-tap",
         schema: [
-          { name: "photo_controls", selector: { boolean: {} } },
+          {
+            name: "photo_controls",
+            selector: { select: { mode: "dropdown", options: PHOTO_CONTROL_OPTIONS } },
+          },
           {
             name: "tap_action",
             selector: { select: { mode: "dropdown", options: TAP_OPTIONS } },
@@ -1647,7 +1873,7 @@ function createAlbumSlideshowCardEditorClass(Base) {
     const c = this._config || {};
     return {
       entity: c.entity || "",
-      photo_controls: c.photo_controls === true,
+      photo_controls: normalizePhotoControls(c.photo_controls),
       transition: c.transition || DEFAULTS.transition,
       duration: c.duration != null ? Number(c.duration) : DEFAULTS.duration,
       easing: c.easing || DEFAULTS.easing,
@@ -1725,7 +1951,7 @@ function createAlbumSlideshowCardEditorClass(Base) {
       background: "Background (optional)",
       tap_action: "Tap action",
       tap_pause_seconds: "Tap pause (seconds)",
-      photo_controls: "Show photo controls",
+      photo_controls: "Photo controls",
       caption_enabled: "Show caption overlay",
       caption_show: "Show",
       caption_position: "Position",
@@ -1954,7 +2180,9 @@ function createAlbumSlideshowCardEditorClass(Base) {
 
     const n = { type: "custom:album-slideshow-card" };
 
-    if (data.photo_controls) n.photo_controls = true;
+    const photoControls = normalizePhotoControls(data.photo_controls);
+    if (photoControls === "always") n.photo_controls = true;
+    if (photoControls === "on_demand") n.photo_controls = "on_demand";
     if (data.entity) n.entity = data.entity;
 
     const t = data.transition || DEFAULTS.transition;
