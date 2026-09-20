@@ -120,13 +120,19 @@ def resolve_output_size(
     return (width, height)
 
 
-def render_image(img: Image.Image, fill_mode: str, width: int, height: int) -> Image.Image:
+def render_image(
+    img: Image.Image,
+    fill_mode: str,
+    width: int,
+    height: int,
+    focus: tuple[float, float] | None = None,
+) -> Image.Image:
     """Render img into a (width x height) canvas using the given fill mode."""
     if fill_mode == FILL_CONTAIN:
         return _resize_contain(img, width, height)
     if fill_mode == FILL_BLUR:
         return _blur_fill(img, width, height)
-    return _resize_cover(img, width, height)
+    return _resize_cover(img, width, height, focus)
 
 
 def pair_images(
@@ -139,6 +145,8 @@ def pair_images(
     divider: int,
     divider_fill: tuple[int, int, int] | tuple[int, int, int, int],
     transparent_divider: bool,
+    focus1: tuple[float, float] | None = None,
+    focus2: tuple[float, float] | None = None,
 ) -> Image.Image:
     canvas_mode = "RGBA" if transparent_divider else "RGB"
     canvas = Image.new(canvas_mode, (target_w, target_h), divider_fill)
@@ -146,8 +154,8 @@ def pair_images(
     if portrait_canvas:
         top_h = max(1, (target_h - divider) // 2)
         bottom_h = max(1, target_h - divider - top_h)
-        top_img = render_image(img1, fill_mode, target_w, top_h)
-        bottom_img = render_image(img2, fill_mode, target_w, bottom_h)
+        top_img = render_image(img1, fill_mode, target_w, top_h, focus1)
+        bottom_img = render_image(img2, fill_mode, target_w, bottom_h, focus2)
         canvas.paste(top_img.convert(canvas_mode), (0, 0))
         canvas.paste(bottom_img.convert(canvas_mode), (0, top_h + divider))
         safe_close(top_img)
@@ -156,8 +164,8 @@ def pair_images(
 
     left_w = max(1, (target_w - divider) // 2)
     right_w = max(1, target_w - divider - left_w)
-    left_img = render_image(img1, fill_mode, left_w, target_h)
-    right_img = render_image(img2, fill_mode, right_w, target_h)
+    left_img = render_image(img1, fill_mode, left_w, target_h, focus1)
+    right_img = render_image(img2, fill_mode, right_w, target_h, focus2)
     canvas.paste(left_img.convert(canvas_mode), (0, 0))
     canvas.paste(right_img.convert(canvas_mode), (left_w + divider, 0))
     safe_close(left_img)
@@ -226,7 +234,12 @@ def _parse_aspect_ratio(ratio: str) -> tuple[int, int]:
     return (16, 9)
 
 
-def _resize_cover(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
+def _resize_cover(
+    img: Image.Image,
+    target_w: int,
+    target_h: int,
+    focus: tuple[float, float] | None = None,
+) -> Image.Image:
     src_w, src_h = img.size
     if src_w <= 0 or src_h <= 0:
         return img.resize((target_w, target_h))
@@ -234,8 +247,18 @@ def _resize_cover(img: Image.Image, target_w: int, target_h: int) -> Image.Image
     new_w = max(1, int(round(src_w * scale)))
     new_h = max(1, int(round(src_h * scale)))
     resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-    left = max(0, int(round((new_w - target_w) / 2)))
-    top = max(0, int(round((new_h - target_h) / 2)))
+    focus_x, focus_y = (0.5, 0.5)
+    if (
+        isinstance(focus, tuple)
+        and len(focus) == 2
+        and all(isinstance(value, (int, float)) for value in focus)
+    ):
+        focus_x = max(0.0, min(1.0, float(focus[0])))
+        focus_y = max(0.0, min(1.0, float(focus[1])))
+    max_left = max(0, new_w - target_w)
+    max_top = max(0, new_h - target_h)
+    left = max(0, min(max_left, int(round(focus_x * new_w - target_w / 2))))
+    top = max(0, min(max_top, int(round(focus_y * new_h - target_h / 2))))
     cropped = resized.crop((left, top, left + target_w, top + target_h))
     if cropped is not resized:
         safe_close(resized)
@@ -274,4 +297,3 @@ def _blur_fill(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
         safe_close(rgb_fg)
     safe_close(fg)
     return bg
-

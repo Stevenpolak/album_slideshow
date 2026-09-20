@@ -124,6 +124,35 @@ def test_render_image_contain_adds_letterbox():
     assert result.size == (200, 200)
 
 
+def test_render_image_cover_uses_vertical_face_focus():
+    img = Image.new("RGB", (100, 300), color="green")
+    img.paste("red", (0, 0, 100, 100))
+    img.paste("blue", (0, 200, 100, 300))
+
+    centred = ip.render_image(img, "cover", 100, 100)
+    focused = ip.render_image(img, "cover", 100, 100, (0.5, 0.1))
+
+    assert centred.getpixel((50, 50)) == (0, 128, 0)
+    assert focused.getpixel((50, 50)) == (255, 0, 0)
+
+
+def test_render_image_cover_uses_horizontal_face_focus():
+    img = Image.new("RGB", (300, 100), color="green")
+    img.paste("red", (0, 0, 100, 100))
+    img.paste("blue", (200, 0, 300, 100))
+
+    focused = ip.render_image(img, "cover", 100, 100, (0.9, 0.5))
+
+    assert focused.getpixel((50, 50)) == (0, 0, 255)
+
+
+def test_render_image_invalid_focus_is_clamped():
+    img = Image.new("RGB", (100, 300), color="green")
+    img.paste("blue", (0, 200, 100, 300))
+    focused = ip.render_image(img, "cover", 100, 100, (2.0, 2.0))
+    assert focused.getpixel((50, 50)) == (0, 0, 255)
+
+
 # ── pair_images ──────────────────────────────────────────────────────────────
 
 def test_pair_images_landscape_canvas():
