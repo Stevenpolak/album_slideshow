@@ -114,6 +114,68 @@ test("desktop hover reveals controls and inactivity resumes the slideshow", () =
   fixture.reveal.dispose();
 });
 
+test("mouse hover-out immediately hides controls and resumes the slideshow", () => {
+  const fixture = revealFixture();
+  fixture.fire("pointerenter", { pointerType: "mouse" });
+  assert.equal(fixture.container.hidden, false);
+  fixture.fire("pointerleave", { pointerType: "mouse" });
+  assert.equal(fixture.container.hidden, true);
+  assert.equal(fixture.reveal.holding, false);
+  assert.equal(fixture.resumes, 1);
+  assert.equal(fixture.timers.size, 0);
+  fixture.fire("pointerenter", { pointerType: "mouse" });
+  assert.equal(fixture.container.hidden, false);
+  fixture.fire("pointerleave", { pointerType: "mouse" });
+  assert.equal(fixture.container.hidden, true);
+  assert.equal(fixture.resumes, 2);
+  fixture.advance(5000);
+  assert.equal(fixture.resumes, 2);
+  fixture.reveal.dispose();
+});
+
+test("touch pointerleave preserves long-press controls until the idle timeout", () => {
+  const fixture = revealFixture();
+  fixture.fire("pointerdown");
+  fixture.advance(500);
+  fixture.fire("pointerup");
+  fixture.fire("pointerleave", { pointerType: "touch" });
+  assert.equal(fixture.container.hidden, false);
+  fixture.advance(4999);
+  assert.equal(fixture.container.hidden, false);
+  fixture.advance(1);
+  assert.equal(fixture.container.hidden, true);
+  assert.equal(fixture.resumes, 1);
+  fixture.reveal.dispose();
+});
+
+test("mouse hover-out keeps controls open for a dialog or active action", () => {
+  const fixture = revealFixture();
+  fixture.fire("pointerenter", { pointerType: "mouse" });
+  fixture.controls.active = true;
+  fixture.fire("pointerleave", { pointerType: "mouse" });
+  fixture.advance(6000);
+  assert.equal(fixture.container.hidden, false);
+  assert.equal(fixture.resumes, 0);
+  fixture.controls.active = false;
+  fixture.reveal.activity();
+  fixture.advance(5000);
+  assert.equal(fixture.container.hidden, true);
+  fixture.reveal.dispose();
+});
+
+test("mouse hover-out does not remove keyboard-focused controls", () => {
+  for (const focused of ["card", "container"]) {
+    const fixture = revealFixture();
+    fixture.fire("pointerenter", { pointerType: "mouse" });
+    fixture[focused].keyboardFocused = true;
+    fixture.fire("pointerleave", { pointerType: "mouse" });
+    fixture.advance(6000);
+    assert.equal(fixture.container.hidden, false, focused);
+    assert.equal(fixture.resumes, 0, focused);
+    fixture.reveal.dispose();
+  }
+});
+
 test("open dialogs and active actions prevent automatic dismissal", () => {
   const fixture = revealFixture();
   fixture.reveal.show();

@@ -336,9 +336,10 @@ class PhotoControlsReveal {
     this._listen(card, "pointerenter", (event) => {
       if (event.pointerType === "mouse") this.show();
     });
-    this._listen(card, "pointerleave", () => {
+    this._listen(card, "pointerleave", (event) => {
       this._cancelPress();
-      this.activity();
+      if (event.pointerType === "mouse" && !this._keyboardFocused()) this.hide();
+      else this.activity();
     });
     this._listen(card, "pointerdown", (event) => this._pointerDown(event));
     this._listen(card, "pointermove", (event) => this._pointerMove(event));

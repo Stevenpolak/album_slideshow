@@ -139,8 +139,9 @@ below the form. For controls on the displayed card, choose
 | **Always** | Keep the toolbar visible |
 
 With **On demand**, the displayed photo stays steady while choosing an action.
-The toolbar dismisses after five seconds of inactivity, a click outside the card,
-or Escape. It stays open while a dialog or action is active, or while it has
+The toolbar dismisses immediately when the mouse leaves the card. It also dismisses
+after five seconds of inactivity, a click outside the card, or Escape.
+It stays open while a dialog or action is active, or while it has
 keyboard focus. Normal taps keep their configured behavior; a long press only
 reveals controls and never hides a photo by itself. Scrolling cancels a pending
 long press. Exclusion updates can still clear a held photo immediately.
