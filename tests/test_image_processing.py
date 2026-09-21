@@ -172,6 +172,52 @@ def test_pair_images_transparent_divider_rgba():
     assert result.mode == "RGBA"
 
 
+@pytest.mark.parametrize("portrait_canvas", [False, True])
+@pytest.mark.parametrize("photo_position", [0, 1])
+@pytest.mark.parametrize("fill_mode", ["cover", "contain", "blur"])
+@pytest.mark.parametrize("divider, transparent", [(0, False), (8, False), (8, True)])
+def test_render_pair_photo_keeps_only_selected_half(
+    monkeypatch, portrait_canvas, photo_position, fill_mode, divider, transparent
+):
+    size = (90, 160) if portrait_canvas else (160, 90)
+    with Image.new("RGB", (100, 100), (240, 0, 0)) as first:
+        with Image.new("RGB", (100, 100), (0, 0, 240)) as second:
+            with ip.pair_images(
+                first, second, *size, fill_mode, portrait_canvas, divider,
+                (0, 0, 0, 0) if transparent else (255, 255, 255), transparent,
+            ) as paired:
+                data = ip.encode_image(paired)
+    length = size[1] if portrait_canvas else size[0]
+    first_length = (length - divider) // 2
+    start, end = (0, first_length) if photo_position == 0 else (first_length + divider, length)
+    box = (0, start, size[0], end) if portrait_canvas else (start, 0, end, size[1])
+    with ip.open_image(data) as paired:
+        with paired.crop(box) as expected:
+            expected_input = (expected.size, expected.tobytes())
+    rendered_inputs = []
+    original_render = ip.render_image
+
+    def render_selected(photo, mode, width, height):
+        rendered_inputs.append((photo.size, photo.tobytes()))
+        return original_render(photo, mode, width, height)
+
+    monkeypatch.setattr(ip, "render_image", render_selected)
+    result = ip.render_pair_photo(data, photo_position, portrait_canvas, divider, fill_mode)
+    assert rendered_inputs == [expected_input]
+    with ip.open_image(result) as rendered:
+        assert rendered.size == size
+        center = rendered.getpixel((size[0] // 2, size[1] // 2))
+        selected_channel = 0 if photo_position == 0 else 2
+        other_channel = 2 if photo_position == 0 else 0
+        assert center[selected_channel] > 220
+        assert center[other_channel] < 15
+
+
+def test_render_pair_photo_rejects_invalid_position():
+    with pytest.raises(ValueError, match="position"):
+        ip.render_pair_photo(_make_jpeg(100, 50), 2, False, 8, "contain")
+
+
 # ── encode_image ─────────────────────────────────────────────────────────────
 
 def test_encode_image_rgb_produces_jpeg():

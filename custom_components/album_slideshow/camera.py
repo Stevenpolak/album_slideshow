@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import logging
 import random
@@ -535,8 +535,7 @@ class AlbumSlideshowCamera(Camera):
                     known_ids.update(photo_id for photo_id in frame.meta.get("photo_ids", []) if photo_id)
             if not photo_ids or any(not photo_id or photo_id not in known_ids for photo_id in photo_ids):
                 raise ValueError("Photo identifier unavailable; refresh the album and try again")
-            if await self.store.async_set_photos_hidden(photo_ids, hidden=True):
-                await self._rebuild_after_exclusion_change()
+            await self._async_change_exclusions(photo_ids, hidden=True)
 
     async def async_restore_photos(
         self, photo_ids: list[str] | None = None, *, undo: bool = False
@@ -547,16 +546,90 @@ class AlbumSlideshowCamera(Camera):
                 else self.store.hidden_photo_ids if photo_ids is None
                 else photo_ids
             )
-            if await self.store.async_set_photos_hidden(selected, hidden=False):
-                await self._rebuild_after_exclusion_change()
+            await self._async_change_exclusions(selected, hidden=False)
 
-    async def _rebuild_after_exclusion_change(self) -> None:
+    async def _async_change_exclusions(self, photo_ids, *, hidden: bool) -> None:
+        generation = self._timeline_generation
+        buffered_frames = (
+            () if self._timeline_dirty
+            else tuple(frame for frame in (self._current_frame, *self._next_frames) if frame is not None)
+        )
+        if await self.store.async_set_photos_hidden(photo_ids, hidden=hidden):
+            if self._timeline_generation != generation + 1:
+                buffered_frames = ()
+            await self._rebuild_after_exclusion_change(buffered_frames)
+
+    async def _rebuild_after_exclusion_change(
+        self, buffered_frames: tuple[_RenderedFrame, ...] = ()
+    ) -> None:
         self._effective_cache = None
         self._invalidate_timeline()
         self._random_order = []
         self._random_pos = 0
         self._recent_urls = []
+        items = self._effective_items()
+        positions = {item.photo_id: index for index, item in enumerate(items) if item.photo_id}
+        reusable = []
+        for frame in buffered_frames:
+            photo_ids = frame.meta.get("photo_ids", [])
+            if not photo_ids or any(photo_id not in positions for photo_id in photo_ids):
+                continue
+            cursor = replace(
+                frame.cursor,
+                index=positions[photo_ids[0]],
+                random_order=(),
+                random_pos=0,
+                recent_urls=(),
+            )
+            reusable.append(replace(frame, cursor=cursor))
+        if reusable:
+            self._timeline_dirty = False
+            self._next_frames.extend(reusable[1:])
+            self._trim_timeline()
+            self._apply_frame(reusable[0])
+            self._schedule_preload()
+            return
+        generation = self._timeline_generation
         await self._clear_current_frame()
+        for frame in buffered_frames:
+            if generation != self._timeline_generation:
+                break
+            photo_ids = frame.meta.get("photo_ids", [])
+            orientation = frame.meta.get("pair_orientation")
+            if len(photo_ids) != 2 or orientation not in ("horizontal", "vertical"):
+                continue
+            remaining = [
+                (half, photo_id) for half, photo_id in enumerate(photo_ids)
+                if photo_id in positions
+            ]
+            if len(remaining) != 1:
+                continue
+            half, photo_id = remaining[0]
+            try:
+                encoded = await self._async_image_job(
+                    ip.render_pair_photo, frame.data, half, orientation == "vertical",
+                    max(0, int(self.store.pair_divider_px)), self.store.fill_mode,
+                )
+            except Exception as err:
+                _LOGGER.debug("Album Slideshow: could not reuse paired photo: %s", err)
+                continue
+            if generation != self._timeline_generation:
+                break
+            cursor = replace(
+                frame.cursor, index=positions[photo_id],
+                random_order=(), random_pos=0, recent_urls=(),
+            )
+            meta = {
+                **frame.meta,
+                "photo_ids": [photo_id],
+                "captured_at_pair": None,
+                "pair_frames": None,
+                "pair_orientation": None,
+            }
+            self._timeline_dirty = False
+            self._apply_frame(_RenderedFrame(encoded, cursor, meta))
+            self._schedule_preload()
+            return
         try:
             await self._rebuild_current_frame()
         except Exception as err:

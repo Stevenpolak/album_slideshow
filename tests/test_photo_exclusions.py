@@ -129,6 +129,221 @@ def test_hide_clears_history_and_preloads_and_filters_the_cached_pool(monkeypatc
     asyncio.run(run())
 
 
+def test_hide_reuses_safe_preloaded_frame_without_rendering(monkeypatch):
+    async def run():
+        items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(4)]
+        cam = await _camera(items, monkeypatch)
+        next_frame = await cam._render_available_frame(
+            cam._current_frame.cursor, items, advance=True
+        )
+        following_frame = await cam._render_available_frame(
+            next_frame.cursor, items, advance=True
+        )
+        cam._next_frames.extend([next_frame, following_frame])
+        renderer = AsyncMock(side_effect=AssertionError("Hide tried to render a ready frame"))
+        cam._render_available_frame = renderer
+
+        await cam.async_hide_photo()
+
+        renderer.assert_not_awaited()
+        assert cam._framebuffer == next_frame.data
+        assert cam._current_frame.meta == next_frame.meta
+        assert cam._index == 0
+        assert cam._effective_items()[cam._index].photo_id == items[1].photo_id
+        assert len(cam._next_frames) == 1
+        assert cam._next_frames[0].data == following_frame.data
+        assert not cam._previous_frames
+        assert cam.store.hidden_photo_ids == {items[0].photo_id}
+
+    asyncio.run(run())
+
+
+def test_hide_rejects_pairs_with_a_hidden_half_and_reuses_the_next_safe_pair(monkeypatch):
+    async def run():
+        items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(4)]
+        for index, item in enumerate(items):
+            item.description = f"Caption {index}"
+        cam = await _camera(items, monkeypatch, paired=True)
+        unsafe = await cam._render_available_frame(cam._current_frame.cursor, items, advance=True)
+        safe = await cam._render_available_frame(unsafe.cursor, items, advance=True)
+        assert unsafe.meta["photo_ids"] == [items[1].photo_id, items[2].photo_id]
+        assert safe.meta["photo_ids"] == [items[2].photo_id, items[3].photo_id]
+        cam._next_frames.extend([unsafe, safe])
+        renderer = AsyncMock(side_effect=AssertionError("A safe pair was already buffered"))
+        cam._render_available_frame = renderer
+
+        await cam.async_hide_photo(position="second")
+
+        renderer.assert_not_awaited()
+        assert cam._framebuffer == safe.data
+        assert cam._last_pair_frames == safe.meta["pair_frames"]
+        assert cam._index == 1
+        assert cam.extra_state_attributes["description"] == "Caption 2"
+        assert cam.extra_state_attributes["displayed_photo_ids"] == safe.meta["photo_ids"]
+        assert not cam._previous_frames
+        assert not cam._next_frames
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("position, remaining_index", [("first", 1), ("second", 0)])
+def test_hide_from_two_photo_pair_uses_cached_surviving_half(monkeypatch, position, remaining_index):
+    async def run():
+        items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(2)]
+        cam = await _camera(items, monkeypatch, paired=True)
+        paired_frame = cam._current_frame
+        await cam._preload_loop(cam._timeline_generation)
+        assert all(len(frame.meta["photo_ids"]) == 2 for frame in cam._next_frames)
+        cam._download_cache = camera._DownloadCache(1)
+        renderer = AsyncMock(side_effect=AssertionError("The surviving half was already rendered"))
+        cam._render_available_frame = renderer
+
+        await cam.async_hide_photo(position=position)
+
+        renderer.assert_not_awaited()
+        assert cam._current_frame.meta["photo_ids"] == [items[remaining_index].photo_id]
+        assert cam._last_pair_frames is None
+        assert cam._last_pair_orientation is None
+        assert cam._framebuffer and cam._framebuffer != paired_frame.data
+        assert not cam._previous_frames
+        assert not cam._next_frames
+        assert cam.extra_state_attributes["empty_reason"] is None
+
+    asyncio.run(run())
+
+
+def test_pair_fallback_rejects_a_frame_invalidated_while_processing(monkeypatch):
+    async def run():
+        items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(2)]
+        cam = await _camera(items, monkeypatch, paired=True)
+        original = camera.ip.render_pair_photo
+
+        def invalidate_while_processing(*args):
+            cam._invalidate_timeline()
+            return original(*args)
+
+        monkeypatch.setattr(camera.ip, "render_pair_photo", invalidate_while_processing)
+        renderer = AsyncMock(wraps=cam._render_available_frame)
+        cam._render_available_frame = renderer
+
+        await cam.async_hide_photo(position="first")
+
+        renderer.assert_awaited_once()
+        assert cam._current_frame.meta["photo_ids"] == [items[1].photo_id]
+        assert not cam._timeline_dirty
+
+    asyncio.run(run())
+
+
+def test_corrupt_cached_pair_falls_back_to_normal_rendering(monkeypatch):
+    async def run():
+        items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(2)]
+        cam = await _camera(items, monkeypatch, paired=True)
+        frame = cam._current_frame
+        cam._current_frame = camera._RenderedFrame(b"invalid-jpeg", frame.cursor, frame.meta)
+        renderer = AsyncMock(wraps=cam._render_available_frame)
+        cam._render_available_frame = renderer
+
+        await cam.async_hide_photo(position="first")
+
+        renderer.assert_awaited_once()
+        assert cam._current_frame.meta["photo_ids"] == [items[1].photo_id]
+        assert cam._framebuffer.startswith(b"\xff\xd8")
+
+    asyncio.run(run())
+
+
+def test_safe_buffer_reuse_keeps_next_and_previous_metadata_consistent(monkeypatch):
+    async def run():
+        items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(5)]
+        cam = await _camera(items, monkeypatch)
+        first = await cam._render_available_frame(cam._current_frame.cursor, items, advance=True)
+        second = await cam._render_available_frame(first.cursor, items, advance=True)
+        cam._next_frames.extend([first, second])
+
+        await cam.async_hide_photo()
+        assert cam._framebuffer == first.data
+        assert await cam._show_next_frame()
+        assert cam._framebuffer == second.data
+        assert cam._index == 1
+        assert cam._effective_items()[cam._index].photo_id == second.meta["photo_ids"][0]
+        assert await cam._show_previous_frame()
+        assert cam._framebuffer == first.data
+        assert cam._index == 0
+        await cam._preload_loop(cam._timeline_generation)
+        assert len(cam._next_frames) == cam._buffer_depth
+        for frame in [cam._current_frame, *cam._previous_frames, *cam._next_frames]:
+            assert items[0].photo_id not in frame.meta["photo_ids"]
+            assert cam._effective_items()[frame.cursor.index].photo_id == frame.meta["photo_ids"][0]
+
+    asyncio.run(run())
+
+
+def test_restore_preserves_current_pixels_and_remaps_the_cursor(monkeypatch):
+    async def run():
+        items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(3)]
+        cam = await _camera(items, monkeypatch)
+        await cam.async_hide_photo()
+        current = cam._current_frame
+        assert current.meta["photo_ids"] == [items[1].photo_id]
+        renderer = AsyncMock(side_effect=AssertionError("Restoring a photo rerendered a valid frame"))
+        cam._render_available_frame = renderer
+
+        await cam.async_restore_photos(undo=True)
+
+        renderer.assert_not_awaited()
+        assert cam._framebuffer == current.data
+        assert cam._current_frame.meta == current.meta
+        assert cam._index == 1
+        assert not cam.store.hidden_photo_ids
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("invalidated_during_save", [False, True])
+def test_exclusion_reuse_rejects_frames_invalidated_by_other_changes(monkeypatch, invalidated_during_save):
+    async def run():
+        items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(3)]
+        cam = await _camera(items, monkeypatch)
+        safe = await cam._render_available_frame(cam._current_frame.cursor, items, advance=True)
+        cam._next_frames.append(safe)
+        if invalidated_during_save:
+            async def save(data):
+                cam._invalidate_timeline()
+            monkeypatch.setattr(cam.store._hidden_storage, "async_save", save)
+        else:
+            cam._timeline_dirty = True
+        renderer = AsyncMock(wraps=cam._render_available_frame)
+        cam._render_available_frame = renderer
+
+        await cam.async_hide_photo()
+
+        renderer.assert_awaited_once()
+        assert items[0].photo_id not in cam._current_frame.meta["photo_ids"]
+        assert not cam._next_frames
+
+    asyncio.run(run())
+
+
+def test_failed_hide_save_keeps_the_original_buffer(monkeypatch):
+    async def run():
+        items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(3)]
+        cam = await _camera(items, monkeypatch)
+        current = cam._current_frame
+        next_frame = await cam._render_available_frame(current.cursor, items, advance=True)
+        cam._next_frames.append(next_frame)
+        monkeypatch.setattr(cam.store._hidden_storage, "async_save", AsyncMock(side_effect=OSError("Disk unavailable")))
+
+        with pytest.raises(OSError, match="Disk unavailable"):
+            await cam.async_hide_photo()
+
+        assert cam._current_frame is current
+        assert list(cam._next_frames) == [next_frame]
+        assert not cam.store.hidden_photo_ids
+
+    asyncio.run(run())
+
+
 def test_explicit_photo_id_hides_the_clicked_photo_after_slide_changes(monkeypatch):
     async def run():
         items = [_item(f"photo-{index}", f"https://example.com/{index}") for index in range(3)]

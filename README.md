@@ -164,8 +164,14 @@ hidden together. **Hidden photos** opens a paginated list where individual photo
 can be restored. **Restore all** requires confirmation in the card. Hidden photos
 remain restorable even when they are no longer in the source album.
 
-Hiding or restoring resets that slideshow's Previous/Next buffer so cached frames
-cannot bring back hidden photos. Hiding the last eligible photo clears the display;
+Hiding or restoring clears previous-frame history and removes unsafe preloaded
+frames, so navigation cannot bring back hidden photos. Safe rendered frames are
+reused immediately and the upcoming buffer is refilled in the background. If every
+ready pair includes the hidden photo, the surviving half can be reused as a single
+photo without fetching its source again. That replacement retains the pair's crop
+until a normal full-source frame is shown.
+
+Hiding the last eligible photo clears the display;
 undo and management controls remain available. The **Hidden photos** sensor shows
 the exclusion count without exposing the full list in entity history.
 

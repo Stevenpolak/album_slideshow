@@ -165,6 +165,32 @@ def pair_images(
     return canvas
 
 
+def render_pair_photo(
+    data: bytes,
+    photo_position: int,
+    portrait_canvas: bool,
+    divider: int,
+    fill_mode: str,
+) -> bytes:
+    """Render one safe photo from an already composed pair without source I/O."""
+    if photo_position not in (0, 1):
+        raise ValueError("Invalid paired-photo position")
+    with open_image(data) as paired:
+        width, height = paired.size
+        length = height if portrait_canvas else width
+        first_length = max(1, (length - divider) // 2)
+        start, end = (
+            (0, first_length) if photo_position == 0
+            else (first_length + divider, length)
+        )
+        if not 0 <= start < end <= length:
+            raise ValueError("Paired photo is outside the rendered canvas")
+        box = (0, start, width, end) if portrait_canvas else (start, 0, end, height)
+        with paired.crop(box) as photo:
+            with render_image(photo, fill_mode, width, height) as rendered:
+                return encode_image(rendered)
+
+
 def encode_image(img: Image.Image) -> bytes:
     """Encode a PIL image to a client-compatible JPEG or PNG.
 
