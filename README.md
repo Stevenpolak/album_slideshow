@@ -1,944 +1,157 @@
-# 📸 Album Slideshow Camera for Home Assistant
+<a id="-album-slideshow-camera-for-home-assistant"></a>
+# Album Slideshow Camera for Home Assistant
 
 [![GitHub Release](https://img.shields.io/github/v/release/eyalgal/album_slideshow)](https://github.com/eyalgal/album_slideshow/releases)
 [![GitHub Downloads](https://img.shields.io/github/downloads/eyalgal/album_slideshow/total.svg)](https://github.com/eyalgal/album_slideshow/releases)
 [![Community Forum](https://img.shields.io/badge/Community-Forum-5294E2.svg)](https://community.home-assistant.io/t/album-slideshow-google-photos-local/996986)
 [![Buy Me A Coffee](https://img.shields.io/badge/buy_me_a-coffee-yellow)](https://www.buymeacoffee.com/eyalgal)
 
-<img width="800" alt="banner" src="https://github.com/user-attachments/assets/591b3541-5e2a-43d0-a97a-145f365cff94" />
+<img width="800" alt="Album Slideshow dashboard preview" src="https://github.com/user-attachments/assets/591b3541-5e2a-43d0-a97a-145f365cff94" />
 
-Turn a **Google Photos shared album**, an **Immich** or **PhotoPrism** library, an **iCloud Shared Album**, a **Synology Photos** library, a **Nextcloud** folder, an **Ente Photos** album, a **local/NAS folder**, or any **Home Assistant Media Source** into a fully controllable Home Assistant camera slideshow.
+Turn a photo album, self-hosted library, or local/NAS folder into a Home Assistant
+camera slideshow. The included dashboard card adds smooth transitions, captions,
+and optional photo controls. Adjust slideshow settings live through Home
+Assistant entities.
 
-Clean. Flexible. Fully runtime configurable. Designed for dashboards.
+## Documentation
 
----
+| Guide | What you will find |
+|-------|--------------------|
+| [Provider Setup](docs/provider-setup.md) | Connect your photo source, choose albums and quality, understand metadata and privacy, and troubleshoot |
+| [Card Guide](docs/card-guide.md) | Add the card, use navigation and hide/restore controls, configure captions and transitions, and see full YAML options |
+| [Reference](docs/reference.md) | Runtime settings, rendering options, entities, camera attributes, and automation actions |
 
-## ✨ What This Integration Does
+<a id="-what-this-integration-does"></a><a id="-key-features"></a><a id="-slideshow-camera"></a>
+## Features
 
-Album Slideshow creates a **camera entity** that automatically cycles through images from:
+- Automatic slideshows with adjustable timing, album refresh, and manual Previous/Next.
+- Pause/resume and a configurable rendered-frame buffer for quick navigation.
+- Hide and restore photos per slideshow without changing the source library.
+- Optional on-demand or always-visible navigation and photo-management controls.
+- Pair portrait or landscape photos, choose cover/contain/blur, and set the aspect ratio.
+- Browser-side transitions and date, location, or description captions when the source provides them.
+- Random or album order, capture/upload date ordering, and date filters including **On this day**.
 
-- **Google Photos** shared albums  
-- **Immich** (direct API): album, person, favorites, all, random, or a custom search  
-- **PhotoPrism** (direct API): album, person, favorites, all, or a custom search  
-- **iCloud** Shared Albums (public link)  
-- **Synology Photos** (direct API): favorites, albums, people, places, tags or subjects  
-- **Nextcloud**: an authenticated WebDAV folder (full metadata) or a public Nextcloud Photos album link (no login needed)  
-- **Ente Photos** public albums (end-to-end encrypted, decrypted inside Home Assistant)  
-- **Local folders** and NAS mounted directories  
-- Home Assistant **Media Source** (local media, Jellyfin, ...)  
+<a id="-image-sources"></a><a id="️-setup-guide"></a>
+## Supported Sources
 
-All behavior is exposed as Home Assistant entities. Adjust everything live without YAML edits or restarts.
+Choose a source below for its setup instructions. The
+[provider comparison](docs/provider-setup.md#choose-a-provider) shows which
+sources provide dates, locations, and descriptions.
 
----
+| Source | Connection |
+|--------|------------|
+| <a id="google-photos"></a>[Google Photos](docs/provider-setup.md#google-photos) | Shared album link |
+| <a id="immich"></a><a id="choosing-what-to-show"></a><a id="image-quality"></a><a id="notes"></a>[Immich](docs/provider-setup.md#immich) | Server URL and API key; albums, people, favorites, or search |
+| <a id="photoprism"></a><a id="choosing-what-to-show-1"></a><a id="image-quality-1"></a><a id="notes-1"></a>[PhotoPrism](docs/provider-setup.md#photoprism) | App password or account; albums, people, favorites, or search |
+| <a id="icloud-shared-album"></a><a id="image-quality-2"></a><a id="notes-2"></a><a id="troubleshooting-slow-legacy-albums"></a>[iCloud](docs/provider-setup.md#icloud-shared-album) | Public Shared Album link |
+| <a id="synology-photos"></a><a id="image-quality-3"></a><a id="notes-3"></a>[Synology Photos](docs/provider-setup.md#synology-photos) | DSM account; personal or shared library |
+| <a id="nextcloud"></a><a id="authenticated-webdav-folder"></a><a id="public-album-link"></a><a id="image-quality-4"></a><a id="notes-4"></a>[Nextcloud](docs/provider-setup.md#nextcloud) | Authenticated WebDAV folder or public Photos album link |
+| <a id="ente-photos"></a><a id="image-quality-5"></a><a id="self-hosted-ente"></a><a id="notes-5"></a>[Ente Photos](docs/provider-setup.md#ente-photos) | Public album link; decrypted inside Home Assistant |
+| <a id="local-folder-or-nas"></a><a id="-exif-capture-date--location-local--nas-only"></a>[Local Folder / NAS](docs/provider-setup.md#local-folder-or-nas) | Folder accessible to Home Assistant |
+| <a id="media-source-local-media-jellyfin-"></a><a id="how-to-find-the-media-source-id"></a><a id="️-metadata-limitation"></a>[Media Source](docs/provider-setup.md#media-source) | Home Assistant media browser, including local media and Jellyfin |
 
-## 🚀 Key Features
-
-### 📷 Slideshow Camera
-- Auto advancing camera entity
-- Configurable slide interval
-- Manual previous / next slide buttons
-- Album refresh control
-- Hide and restore photos per slideshow without changing the source library
-- Optional on-demand or always-visible navigation and photo-management controls
-
-### 🖼 Image Sources
-- **Google Photos** shared albums
-- **Immich** (direct API): album, person, favorites, all, random, or a custom search, with full metadata
-- **PhotoPrism** (direct API): album, person, favorites, all, or a custom search, with full metadata
-- **iCloud** Shared Albums (public link), with capture date + captions
-- **Synology Photos** (direct API): favorites, albums, people, places, tags or subjects, with full metadata
-- **Nextcloud**: an authenticated WebDAV folder (app-password auth, recursive, full metadata), or a public Nextcloud Photos album link (no login, full metadata)
-- **Ente Photos** public album links (no login, end-to-end encrypted, with full metadata)
-- **Local folder** paths and NAS mounted directories
-- Home Assistant **Media Source** (local media, Jellyfin, ...)
-- Optional recursive scanning
-
-### 📍 EXIF & Location (local / NAS / Immich / PhotoPrism / Synology / Nextcloud / Ente)
-- Reads capture date so date-filter modes work (EXIF `DateTimeOriginal` with `OffsetTimeOriginal` for local files; Immich's own capture date for the Immich provider)
-- Surfaces GPS as `latitude` / `longitude` camera attributes
-- Human-readable `location` label (reverse-geocoded via OpenStreetMap Nominatim for local files, or Immich's own place data); per-album opt-out for geocoding in the integration's Configure dialog
-
-### 🗓 Filter & Order by Date
-- Date filter: last 7 / 30 / 365 days, this month, this year, **On this day** memories
-- Order modes: random, album order, **newest taken**, **oldest taken**, **newest added**, **oldest added**
-- Capture date and upload date exposed as camera attributes (with paired-photo support)
-
-### ⏯ Pause / Resume
-- Pause switch holds the current slide indefinitely
-- Manual "Previous slide" and "Next slide" buttons still work while paused
-- Previous and Next swap pre-rendered frames for immediate navigation
-- A configurable navigation buffer retains previous frames and pre-renders upcoming frames (even in random order)
-- Survives Home Assistant restarts
-
-### ✨ Transitions
-- Smooth slide transitions rendered in the browser, so they stay buttery even on lower-end hardware
-- Effects: `random`, `none`, `fade`, `slide-left`, `slide-right`, `slide-up`, `slide-down`, `wipe-left`, `wipe-right`, `zoom`
-- `random` picks a different effect per slide (and avoids repeating the previous one)
-- Configurable duration and CSS easing
-- Aspect ratio + fill mode inheritance from the camera entity (cover / contain / blur backdrop)
-
-### 🎨 Smart Rendering Engine
-
-#### Orientation Mismatch Handling
-
-| Mode | Behavior |
-|------|----------|
-| **Pair** | Display two mismatched images side by side |
-| **Single** | Render single image using selected fill mode |
-| **Avoid** | Skip mismatched images |
-
-#### Fill Modes
-
-| Mode | Behavior |
-|------|----------|
-| **Blur** | Image over blurred background |
-| **Cover** | Crop to fill canvas |
-| **Contain** | Fit inside canvas with bars |
-
-#### Layout Options
-- Configurable aspect ratio such as 16:9, 4:3, 1:1, 9:16
-- Shuffle or album order
-- Pair divider size/color control
-
----
-
-## 🎛 Runtime Configuration
-
-The following entities allow you to adjust slideshow behavior without restarting Home Assistant.
-
-| Entity Type | Name | Default | Accepted Values | Description |
-|-------------|------|---------|----------------|-------------|
-| Number | Slide interval | 60 | Any positive integer (seconds) | Time between slides |
-| Number | Album refresh | 24 | Any positive integer (hours) | How often album contents refresh |
-| Number | Pair divider size | 8 | 0-64 (px) | Width of divider between paired images |
-| Number | Pair minimum gap | 0 (off) | 0-50 (% of album) | Above 0, shuffles pairing candidates outside a circular index gap, capped to keep candidates available. Helps avoid nearby photos but does not detect photo sessions. At 0, keeps the original nearest-candidate search |
-| Number | Navigation buffer | 2 | 0-10 (slides) | Fully rendered slides cached before and after the current frame for immediate Previous/Next navigation |
-| Number | Image cache size | 75 | 50-1000 (MB) | Memory budget for downloaded image data (per album) |
-| Select | Fill mode | blur | blur, cover, contain | How images fill the canvas |
-| Select | Orientation mismatch | pair | pair, single, avoid | Handling of portrait and landscape mismatch |
-| Select | Order mode | random | random, album_order, newest_taken, oldest_taken, newest_added, oldest_added | Slide ordering behavior |
-| Select | Aspect ratio | 16:9 | 16:9, 4:3, 1:1, 9:16, and more | Canvas aspect ratio |
-| Select | Max resolution | 4K (2160p) | 480p, 720p, 1080p, 1440p, 4K (2160p), original | Cap output resolution by short edge; use original to render at native size |
-| Select | Date filter | off | off, last_7_days, last_30_days, last_365_days, this_month, this_year, on_this_day | Restrict the slideshow to a date window based on photo capture date |
-| Text | Pair divider color | #FFFFFF | Hex, named colors, transparent | Divider color between paired images |
-| Switch | Pause slideshow | off | on / off | Hold the current frame; advances pause until turned off |
-
-### Hide Photos From a Slideshow
-
-Hide photos from the ambient display without deleting, archiving, or changing
-anything in the source library. Exclusions belong to **one configured slideshow**,
-persist across restarts and album refreshes, and apply to every card using that
-slideshow's camera. Other configured slideshows are unaffected.
-
-In the card editor, use the navigation, pause, and photo-management controls
-below the form. For controls on the displayed card, choose
-**Interaction > Photo controls**:
-
-| Mode | Behavior |
-|------|----------|
-| **Off** (default) | No controls on the displayed card; they remain available in the editor |
-| **On demand** | Hold the photo for half a second to reveal the toolbar; desktop hover or keyboard focus also reveals it |
-| **Always** | Keep the toolbar visible |
-
-The toolbar groups **Previous**, **Pause/Resume**, and **Next** separately from
-**Hide**, **Undo hide**, and **Hidden photos**. Previous is disabled when no earlier
-frame is cached. Previous/Next update the displayed photo even while the toolbar
-is holding it, and still work while the slideshow is paused. Pause/Resume controls
-the slideshow's existing pause switch, so it affects all cards using that camera;
-the icon follows the actual Home Assistant state. **Refresh album** stays in the
-editor's Actions section.
-
-With **On demand**, the displayed photo stays steady while choosing an action.
-This holds only that card's display; other cards continue normally unless you
-use **Pause/Resume** to pause the slideshow itself.
-The toolbar dismisses immediately when the mouse leaves the card. It also dismisses
-after five seconds of inactivity, a click outside the card, or Escape.
-It stays open while a dialog or action is active, or while it has
-keyboard focus. Normal taps keep their configured behavior; a long press only
-reveals controls and never hides a photo by itself. Scrolling cancels a pending
-long press. Exclusion updates can still clear a held photo immediately.
-
-For YAML, use `photo_controls: off`, `on_demand`, or `always`. Existing
-`photo_controls: true` settings still mean Always, and `false` still means Off.
-Paired slides offer explicit **left/right** or **top/bottom** choices, plus
-**Hide both photos**.
-
-**Undo hide** restores the last hide action, including both photos if they were
-hidden together. **Hidden photos** opens a paginated list where individual photos
-can be restored. **Restore all** requires confirmation in the card. Hidden photos
-remain restorable even when they are no longer in the source album.
-
-Hiding or restoring clears previous-frame history and removes unsafe preloaded
-frames, so navigation cannot bring back hidden photos. Safe rendered frames are
-reused immediately and the upcoming buffer is refilled in the background. If every
-ready pair includes the hidden photo, the surviving half can be reused as a single
-photo without fetching its source again. That replacement retains the pair's crop
-and detail until a normal full-source frame is shown. If no safe cached frame or
-half is available, preparing a replacement still requires a new render. Downloads
-from another slideshow no longer block hide/restore behind the shared
-image-processing lock; image-processing jobs remain serialized across albums.
-
-Hiding the last eligible photo clears the display;
-undo and management controls remain available. The **Hidden photos** sensor shows
-the exclusion count without exposing the full list in entity history.
-
-Exclusions are loaded before the slideshow starts. If they cannot be loaded,
-setup fails instead of displaying photos without applying the hidden list. A
-failed save leaves the existing exclusions unchanged. Check **Settings > System >
-Logs** for the error and retry after resolving the storage problem.
-
-Photo IDs come from the source, not filenames or expiring download URLs. Local
-files use normalized full paths: renaming or moving a file changes its identity.
-Replacing a source asset with a new ID also makes it a new photo. A photo without
-a usable ID cannot be hidden; refresh an older cached album to obtain IDs. Once
-a slideshow has exclusions, unidentified photos are skipped rather than risk
-redisplaying a hidden photo.
-
-### Automation Actions
-
-Every action below requires `entry_id` in its `data`, using the camera's
-`entry_id` attribute. This is the configured slideshow's ID, not its camera
-entity ID.
-
-| Action | Additional fields |
-|--------|-------------------|
-| `album_slideshow.previous_slide` | None; shows the previous cached frame |
-| `album_slideshow.next_slide` | None; advances to the next frame, including while paused |
-| `album_slideshow.refresh_album` | None; re-fetches the source album |
-| `album_slideshow.hide_photo` | Optional `photo_ids` list from `displayed_photo_ids`, or `position`: `first`, `second`, `both`. Optional `frame_id` rejects a stale current-frame action. |
-| `album_slideshow.undo_hide` | None |
-| `album_slideshow.restore_photos` | `photo_ids` list |
-| `album_slideshow.restore_all_photos` | None; makes all excluded photos eligible again |
-| `album_slideshow.list_hidden_photos` | Optional `offset` (default 0) and `limit` (default 50, range 1-100); returns `photos`, `total`, and `offset` as response data |
-
-The **Hide current photo** button handles single-photo slides. For pairs, use
-the card controls or specify a position/IDs in the action. ID-based actions target
-the chosen photo even if the slideshow advances before the request arrives.
-
-`list_hidden_photos` requires a response: set `response_variable` when calling
-it from a script or automation. Each entry in `photos` contains `photo_id`,
-`name` (the source filename when available, otherwise an ID-based label), and
-`in_album` (whether the photo is still in the cached source album). `total` is
-the full exclusion count, not the page length. Increase `offset` to fetch the
-next page; pass the returned `photo_id` values to `restore_photos`.
-
-Pause/Resume uses the existing **Pause slideshow** switch with `switch.turn_on` /
-`switch.turn_off`, not a separate slideshow action.
-
----
-
-## 📦 Installation
+<a id="-installation"></a>
+## Installation
 
 ### HACS (recommended)
 
-Album Slideshow Camera is available in **HACS**.
+1. Find **Album Slideshow** in HACS and download it.
+2. Restart Home Assistant.
+3. Go to **Settings > Devices & services > Add Integration**, choose
+   **Album Slideshow**, and follow the setup guide for your source above.
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=eyalgal&repository=album_slideshow)
-
-### Upgrading to v1.11.0
-
-In **HACS > Album Slideshow > three-dot menu > Redownload**, choose **v1.11.0**,
-then restart Home Assistant and reload the dashboard. Existing slideshow entries
-do not need to be recreated. Displayed-card controls are off by default; enable
-**Interaction > Photo controls > On demand** or **Always** in the card editor.
-
-The stable release uses the same code and ZIP as the final v1.11.0 pre-release
-(`0bcfed2`). Earlier v1.11.0 test builds used the same version number, so
-redownload v1.11.0 if you installed an earlier build or are unsure which one you
-have. A restart alone does not download the fixes. Existing hidden lists and
-`photo_controls: true` / `false` settings are preserved.
+[![Open Album Slideshow in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=eyalgal&repository=album_slideshow)
 
 ### Manual Installation
 
-1. Download `album_slideshow.zip` from the latest release.
+1. Download `album_slideshow.zip` from the [latest release](https://github.com/eyalgal/album_slideshow/releases/latest).
 2. Extract its contents into `config/custom_components/album_slideshow/`.
-  The ZIP contains the component files at its root, so `manifest.json` must
-  end up directly inside that folder, not another nested directory.
-3. Restart Home Assistant and reload the dashboard after an upgrade.
-4. For a first installation, add the integration from **Devices & services**.
+   The ZIP has component files at its root: `manifest.json` must be directly
+   inside that folder, not in another nested directory.
+3. Restart Home Assistant and add the integration from **Devices & services**.
 
----
+<a id="upgrading-to-v1110"></a>
+### Updating
 
-## ⚙️ Setup Guide
+Update through HACS, restart Home Assistant, and reload the dashboard.
+Existing slideshow entries do not need to be recreated. To reinstall a specific
+version, use **HACS > Album Slideshow > three-dot menu > Redownload**.
 
-Pick the provider that matches where your photos live:
+Coming from a v1.11.0 test build? See the
+[v1.11.0 upgrade notes](https://github.com/eyalgal/album_slideshow/releases/tag/v1.11.0)
+to make sure you have the final build. A restart alone does not download updates.
 
-| Provider | Best for | Date filter / ordering | Location | Description caption |
-|----------|----------|:---:|:---:|:---:|
-| **Google Photos** | A shared album link | ✅ (dates only) | ❌ | ❌ |
-| **Immich** | An Immich server (album, person, favorites, all, search) | ✅ | ✅ | ✅ |
-| **PhotoPrism** | A PhotoPrism server (album, person, favorites, all, search) | ✅ | ✅ | ✅ |
-| **iCloud** | An iCloud Shared Album public link | ✅ | ❌ | ✅ |
-| **Synology** | A Synology Photos library (favorites, albums, people, places, tags, subjects) | ✅ | ✅ | ✅ |
-| **Nextcloud (folder)** | Any folder in your Nextcloud files (WebDAV, app password) | ✅ | ✅ | ✅ |
-| **Nextcloud (public link)** | A public Nextcloud Photos album share link (no login) | ✅ | ✅ | ✅ |
-| **Ente Photos** | A public Ente album link (no login, end-to-end encrypted) | ✅ | ✅ | ✅ |
-| **Local Folder** | Files on the HA host / NAS | ✅ | ✅ | ✅ |
-| **Media Source** | Any HA media source with no API (local media, Jellyfin, ...) | ❌ | ❌ | ❌ |
+<a id="-album-slideshow-card"></a>
+## Add a Dashboard Card
 
-> Media Source and Google Photos serve photos as URLs, so there is no EXIF
-> to read. For full metadata (dates, location, description), use **Local
-> Folder** for local/NAS files or the **Immich** / **PhotoPrism** provider for
-> a self-hosted photo server. The Media Source route also works with those but
-> without metadata, so prefer the direct provider when you have one.
+In the dashboard editor, add an **Album Slideshow** card and select your camera.
+The card is registered automatically; no separate HACS frontend installation or
+manual resource entry is needed. Hard-refresh the dashboard after an upgrade
+if the new card script has not loaded.
 
-### Google Photos
-
-1. Open a shared Google Photos album  
-2. Copy the shared link such as `https://photos.app.goo.gl/...`  
-3. Add the integration  
-4. Paste the link  
-
----
-
-### Immich
-
-The **Immich** provider connects straight to your [Immich](https://immich.app/)
-server for **full photo metadata**: capture date, GPS/location, and description
-all work, and you can slideshow far more than just an album. If you have an
-Immich server, prefer this over the Media Source route.
-
-1. In Immich, create an API key: **Account Settings → API Keys → New API Key**.
-   Read scopes are enough: `server.about`, `asset.read`, `asset.view`,
-   `asset.download`, `album.read`, `person.read`. `server.about` is what the
-   setup step uses to check the URL and key, so setup fails without it.
-2. Add the integration and choose **Immich (direct API, full metadata)**.
-3. Enter your Immich URL (e.g. `http://192.168.1.10:2283`) and the API key.
-4. Give it a name, tick what you want to show, and choose the image quality.
-
-#### Choosing what to show
-
-Tick any mix of these and they are combined into one slideshow:
-
-| Option | What it adds |
-|--------|--------------|
-| **Albums** | Photos from the albums you pick (searchable, with **Select all**) |
-| **People** | Photos of the people you pick (searchable, with **Select all**) |
-| **Include favorites** | Everything you have favorited in Immich |
-
-Immich has no "OR" search, so the integration queries each album and each
-person separately and merges the results, deduplicated. That means **People**
-gives you every photo that includes any of them (not only the group shots where
-they all appear together), and you can freely mix albums, people and favorites -
-for example "the Family album OR these 5 people OR my favorites". **Leave
-everything empty to show your whole library (all photos).**
-
-**Advanced:** you can also add an Immich search filter (JSON) to fold its results
-into the same slideshow. It is passed to
-Immich's [`search/metadata`](https://api.immich.app/endpoints/search/searchAssets)
-endpoint (with `type` forced to images). Examples:
-
-```json
-{ "city": "Paris", "isFavorite": true }
-```
-```json
-{ "country": "Japan", "takenAfter": "2023-01-01T00:00:00Z" }
-```
-
-#### Image quality
-
-- **Preview** (default) - a downscaled preview; smoothest slideshow.
-- **Full size** - the large rendered version.
-- **Original** - the untouched original file (largest, slowest).
-
-#### Notes
-
-- The API key is sent **only as a server-side request header**, so it never
-  appears in the camera's `current_url` attribute or reaches the browser. Home
-  Assistant fetches and re-serves the images; your Immich server is never
-  exposed to the dashboard client.
-- Capture dates come from the asset list up front, so date filters and date
-  ordering work immediately. Location and description are filled in by a
-  background pass (one lightweight call per photo, cached), so they appear
-  shortly after the first load, the same way local-folder EXIF does.
-
----
-
-### PhotoPrism
-
-The **PhotoPrism** provider connects straight to your
-[PhotoPrism](https://www.photoprism.app/) server for **full photo metadata**:
-capture date, GPS/location, and description all work, and you can combine
-albums, people and favorites into one slideshow. If you have a PhotoPrism
-server, prefer this over the Media Source route.
-
-1. Add the integration and choose **PhotoPrism (direct API, full metadata)**.
-2. Enter your PhotoPrism URL (e.g. `http://192.168.1.10:2342`).
-3. Choose how to authenticate:
-   - **App password** (recommended) - in PhotoPrism go to **Settings → Account
-     → Apps and Devices** and create one, then paste it here.
-   - **Username + password** - your normal PhotoPrism login. The password is
-     stored so the integration can refresh its session automatically; it is
-     kept on the server side and never reaches the browser.
-4. Give it a name, tick what you want to show, and choose the image quality.
-
-#### Choosing what to show
-
-Works exactly like the Immich picker - tick any mix and they are combined into
-one slideshow:
-
-| Option | What it adds |
-|--------|--------------|
-| **Albums** | Photos from the albums you pick (searchable, with **Select all**) |
-| **People** | Photos of the people you pick (searchable, with **Select all**) |
-| **Include favorites** | Everything you have favorited in PhotoPrism |
-
-PhotoPrism has no "OR" across filters, so the integration queries each album and
-each person separately and merges the results, deduplicated - so **People**
-gives you every photo that includes any of them, and you can freely mix albums,
-people and favorites. **Leave everything empty to show your whole library.**
-
-**Advanced:** you can also add a PhotoPrism
-[search query](https://docs.photoprism.app/user-guide/search/filters/) to fold
-its results into the same slideshow, for example:
-
-```
-color:red
-```
-```
-country:jp year:2023
-```
-
-#### Image quality
-
-- **Preview** (default, 1280px) - smoothest slideshow.
-- **Full size** (1920px) - more detail.
-- **High detail** (2560px) - largest, slowest.
-
-#### Notes
-
-- PhotoPrism serves thumbnails with a rotatable preview token in the URL (its
-  own cookie-free scheme), so no login token is ever placed in the image URL.
-  The integration reads the preview token from case-insensitive search response
-  headers or, with username/password authentication, from the login response.
-- All photo metadata (date, location, description) comes back inline with the
-  photo list, so date filters, location and captions work from the first load
-  with no background pass.
-
----
-
-### iCloud Shared Album
-
-The **iCloud** provider slideshows a **public iCloud Shared Album**. No Apple ID
-or password is needed - the album's share link is the only credential, the same
-way anyone with the link can view it on the web.
-
-1. In the **Photos** app (iPhone/iPad/Mac), open the shared album, tap the
-   people/share icon, and enable **Public Website** (then copy that link). The
-   link looks like `https://www.icloud.com/sharedalbum/#B2Xabc...`.
-2. Add the integration, choose **iCloud Shared Album**, paste the link, give it
-   a name, and pick an image quality.
-
-#### Image quality
-
-- **Full size** (default) - the largest version Apple generated (usually around
-  2048px); best for a slideshow.
-- **Preview** - a small thumbnail; fastest / least bandwidth.
-
-#### Notes
-
-- **Capture date and captions work** (both come inline with the album data), so
-  date filters, date ordering, and the caption overlay all apply.
-- **No location.** Apple strips GPS from shared-album web data, so the
-  `latitude`/`longitude`/`location` attributes stay empty (same as Google
-  Photos).
-- Contributors can keep adding photos to the album; new ones show up on the next
-  refresh.
-- The image URLs Apple hands out are signed and expire after about a day, so the
-  integration re-fetches them on every album refresh.
-- Image downloads marked `application/octet-stream` are accepted only from
-  `icloud-content.com` and its subdomains, checked after redirects. Download
-  limits and image decoding checks still apply. HEIC/HEIF decoding depends on
-  the codecs available in your Home Assistant installation.
-
-#### Troubleshooting slow legacy albums
-
-For legacy Shared Albums that fail during setup or the first refresh, v1.10.0
-includes request-stage diagnostics and retries. It does not change the CloudKit
-backend or the image decoder.
-
-- Each listing or image-URL request has a 15-second connection limit, a
-  60-second idle-read limit and a 90-second total limit. These are per-request
-  limits, not a deadline for loading the whole album.
-- A timeout, connection/payload failure or selected transient HTTP error gets
-  one retry after one second. Successful URL batches are not repeated. TLS
-  errors, invalid links, rate limits and other non-transient failures are not
-  retried within the request.
-- Failures identify link validation, photo listing, or the image-URL batch
-  number, with the host, endpoint, attempt, elapsed time and error type/status.
-  These request diagnostics omit the share token and raw response contents.
-- Apple's HTTP 330 partition redirects are accepted from either the JSON body
-  or response headers, limited to one redirect to an Apple shared-streams host.
-
-To test: HACS > Album Slideshow > three-dot menu > **Redownload** > **v1.10.0** (or newer),
-then restart Home Assistant and retry the entry. If it still fails, share the
-new `Error querying iCloud album` or `iCloud validation failed` message after
-checking it for personal information. No album share link is needed for this
-diagnostic test.
-
----
-
-### Synology Photos
-
-The **Synology** provider connects straight to the **Photos** package on your
-Synology NAS for **full photo metadata** (capture date, GPS location and
-captions). Like the Immich and PhotoPrism providers, you can combine any mix of
-**favorites, albums (including albums shared with you), people, places, tags and
-subjects** into one slideshow, from either the **personal** ("My Photos") or
-**shared** ("Shared Space") library.
-
-1. Add the integration and choose **Synology Photos (direct API, full
-   metadata)**.
-2. Enter your DSM address (e.g. `http://192.168.1.10:5000`, or your HTTPS /
-   QuickConnect URL) and an account username and password.
-3. Choose the **Personal** or **Shared** library.
-4. If the account has **two-factor authentication**, also enter a current
-   6-digit code. This is only needed once - a trusted-device token is stored so
-   later refreshes never prompt for a code again.
-5. Tick what you want to show (favorites, albums, people, places, tags,
-   subjects) - or leave everything unticked for **all photos** - then name it
-   and choose an image quality.
-
-> **Combining sources.** Synology has no "OR" across categories, so the
-> integration queries each ticked album/person/place/tag/subject separately and
-> merges the results (duplicates removed). Favorites and subjects are a Personal
-> library feature.
-
-#### Image quality
-
-Synology serves pre-generated thumbnails:
-
-- **Large** (default) - the biggest thumbnail; best for a slideshow.
-- **Medium** - a good balance of detail and bandwidth.
-- **Small** - a small thumbnail; fastest / least bandwidth.
-
-#### Notes
-
-- **Date, location and captions all work** - Synology returns capture date, GPS
-  coordinates and a reverse-geocoded place name inline, so date filters, date
-  ordering, the location attribute, and the caption overlay all apply.
-- The password is stored so the integration can re-authenticate when its session
-  expires. The session id is sent only server-side (it never appears in the
-  camera's image URL or the browser).
-- New photos added to the album or library show up on the next refresh.
-- Albums that another user shared with your account appear under **Albums**
-  tagged "(shared)"; they are fetched by their share passphrase.
-
-> **Use a dedicated account.** Create a normal (non-admin) DSM user, give it
-> access only to the Photos content you want to show, and use that here rather
-> than your admin login.
-
----
-
-### Nextcloud
-
-The **Nextcloud** provider has two connection modes, both with **full photo
-metadata** (capture date, GPS location and captions): an authenticated
-**WebDAV folder**, or a public **Nextcloud Photos album link** that needs no
-login. Add the integration, choose **Nextcloud**, then pick a connection type.
-
-#### Authenticated WebDAV folder
-
-Slideshows **any folder in your Nextcloud files** over WebDAV. Works on any
-Nextcloud server - no Photos or Memories app is required.
-
-1. In Nextcloud, create an **app password**: **Settings -> Security ->
-   Devices & sessions -> Create new app password**. Copy the generated
-   password (it is shown only once).
-2. Choose **Authenticated WebDAV folder**.
-3. Enter your server URL (e.g. `https://cloud.example.com`), your username, and
-   the app password.
-4. Point it at a **folder path** (e.g. `Photos/Family`), or leave it blank for
-   your whole files root. Tick **Include subfolders** to recurse.
-5. Name it and pick an image quality.
-
-#### Public album link
-
-Slideshows a **public Nextcloud Photos album share**, with no Nextcloud
-login stored or required.
-
-1. In the Nextcloud **Photos** app, open the album you want to share and
-   create a **public link share** (or use an existing one).
-2. Choose **Public album link**.
-3. Paste the share link (e.g.
-   `https://cloud.example.com/apps/photos/public/AbC123`).
-4. Name it and pick an image quality.
-
-#### Image quality
-
-- **Preview** (default) - a resized thumbnail; smoothest slideshow.
-- **Original** - the untouched original file (largest, slowest).
-
-#### Notes
-
-- **Date, location and captions all work in both modes.** Nextcloud has no
-  metadata-only API, so the integration reads EXIF the same way the **Local
-  Folder** provider does: it downloads each original photo once in the
-  background and reads its EXIF/IPTC/XMP. Progress is tracked by the
-  **Enrichment progress** diagnostic sensor, and the same reverse-geocoding
-  opt-out applies in the integration's **Configure** dialog.
-- **Folder mode:** the app password is stored so the integration can re-list
-  the folder on each refresh. It is sent to Nextcloud server-side only (HTTP
-  Basic auth) and never appears in the camera's image URL or the browser.
-- **Public link mode:** no credentials are stored - the share token embedded
-  in the link is the only thing the server checks. Anyone with the link (or
-  the camera's image URL) can view the photos, same as opening the share
-  page directly.
-- New photos dropped into the folder or added to the shared album show up on
-  the next refresh.
-- Videos and non-image files are skipped.
-
----
-
-### Ente Photos
-
-The **Ente** provider slideshows a **public Ente album link**, with **full
-photo metadata** (capture date, GPS location and captions). No Ente account,
-password or API key is involved.
-
-Ente is **end-to-end encrypted**, so this provider works differently from the
-others: the album's decryption key travels in the link itself and never
-reaches Ente's servers. Home Assistant downloads the encrypted bytes and
-decrypts them locally, then serves the decrypted image to your dashboard.
-
-1. In Ente (mobile or web), open the album, tap **Share** and create a
-   **public link**.
-2. Copy the link. It looks like
-   `https://albums.ente.io/?t=TOKEN#KEY`.
-3. Add the integration and choose **Ente Photos (public album link)**.
-4. Paste the link, name the album and pick an image quality.
-
-> [!IMPORTANT]
-> **Copy the whole link, including everything after the `#`.** That fragment
-> is the album's decryption key. Without it the photos cannot be decrypted,
-> and some apps truncate links at the `#` when sharing them. If setup fails
-> with "that does not look like an Ente public album link", a missing
-> fragment is the usual cause.
-
-#### Image quality
-
-- **Full quality** (default) - the original file, decrypted locally.
-- **Preview** - Ente's smaller pre-generated thumbnail; much faster to load
-  and lighter on CPU, noticeably softer on a large display.
-
-#### Self-hosted Ente
-
-Leave **API endpoint** blank to use Ente's hosted service. If you run your own
-Ente (museum) server, enter its API URL there, for example
-`https://api.photos.example.com`.
-
-#### Notes
-
-- **Date, location and captions all work**, and unlike the folder-style
-  providers they cost nothing extra: Ente returns metadata alongside the file
-  list, so it is decrypted up front rather than by downloading every photo.
-  Reverse-geocoding into a `location` label still applies, with the same
-  opt-out in the integration's **Configure** dialog.
-- **Decryption happens in Home Assistant.** Because there is no URL that
-  serves a decrypted image, the camera's `current_url` attribute shows an
-  internal `ente://<id>` reference instead of a real link. The access token
-  and decryption key are never placed in an image URL or exposed to the
-  browser.
-- The link's access token and collection key are stored in the config entry so
-  the integration can re-list and decrypt on each refresh.
-- Full-quality mode decrypts each original in Home Assistant. On a low-powered
-  host (a Pi, say) with very large photos, **Preview** gives a smoother
-  slideshow.
-- Password-protected album links are not supported yet.
-- Videos and live photos are skipped.
-- Photos added to the album show up on the next refresh.
-
----
-
-### Local Folder or NAS
-
-Use any folder accessible to Home Assistant.
-
-Helpful path mappings:
-
-| Input | Resolves To |
-|-------|------------|
-| `/local/...` | `/config/www/...` |
-| `media/...` | `/media/...` |
-| `media/local/...` | `/media/...` |
-
-For NAS:
-- Mount it first
-- Use the mounted path
-
-#### 📍 EXIF capture date & location (local / NAS only)
-
-For local-folder entries the integration reads EXIF metadata in the
-background after every refresh:
-
-- **Capture date** — `DateTimeOriginal` is preferred; if missing, the file's
-  modification time is used so date-based ordering still works for
-  screenshots and scans. When `OffsetTimeOriginal` is present (most modern
-  cameras and phones) it is honoured; otherwise the timestamp is interpreted
-  as the host's local time.
-- **GPS coordinates** — `GPSLatitude`/`GPSLongitude` are exposed as the
-  `latitude` / `longitude` camera attributes. `(0, 0)` "null island" stamps
-  are ignored.
-- **Reverse-geocoded location** — by default the integration calls the
-  public [Nominatim](https://nominatim.openstreetmap.org/) (OpenStreetMap)
-  service to translate coordinates into a human-readable label such as
-  `"Lisbon, Portugal"`, exposed as the `location` attribute. Coordinates
-  are rounded to **~100 m** before lookup and the answer is cached on disk,
-  so the same neighbourhood is only ever fetched once. Nominatim's
-  free-tier policy (1 req/sec, identifying User-Agent) is respected.
-
-**Privacy / opt-out:** if you'd rather not send any coordinates to
-OpenStreetMap, open *Settings → Devices & Services → Album Slideshow → your
-album → Configure* and turn off **Reverse-geocode EXIF GPS coordinates**.
-The `latitude`/`longitude` attributes still work; only the `location`
-label is suppressed. The opt-out is per-album.
-
-Progress for both phases is exposed as the **Enrichment progress**
-diagnostic sensor (percent complete, with `phase`, `exif_done`,
-`geocode_done` etc. as attributes).
-
----
-
-### Media Source (local media, Jellyfin, ...)
-
-The **Media Source** provider points the slideshow at any Home Assistant
-[Media Source](https://www.home-assistant.io/integrations/media_source/)
-folder. This is the easiest way to slideshow an **Immich** album or a
-recognized person, and it also works with local media, Jellyfin, and any
-other integration that exposes a media source.
-
-1. Add the integration and choose **Media Source (Immich, local media, ...)**.
-2. Give the album a **name**.
-3. Paste the **Media Source id** of the folder you want (it starts with
-   `media-source://`). See below for how to find it.
-
-The integration walks that folder (and its subfolders) collecting images,
-skipping videos, system folders (e.g. Synology `@eaDir`), and non-web
-formats (`.psd`, `.tiff`, `.heic`, RAW). It re-reads the folder on every
-album refresh, so photos you add later show up automatically.
-
-#### How to find the `media-source://` id
-
-**Immich**
-
-1. Open the sidebar **Media** browser (or a Media card).
-2. Browse into **Immich → Albums / People / Tags → your album**.
-3. The folder's id looks like
-   `media-source://immich/<config-entry-id>|albums|<album-id>` (people and
-   tags use `|people|` / `|tags|`). To copy the exact value, open your
-   browser's developer tools → **Network** tab, filter for `media_source`,
-   click into the folder, and read the folder's `media_content_id` from the
-   `media_source/browse_media` response.
-
-**Local media (e.g. a NAS folder under `/media`)**
-
-You can build the id from the path. Take whatever comes after `/media/` and
-prefix it with `media-source://media_source/local/`:
-
-| Media path | Media Source id |
-|------------|-----------------|
-| `/media/local/Pictures/Family` | `media-source://media_source/local/Pictures/Family` |
-| `/media/Photos/2024` | `media-source://media_source/local/Photos/2024` |
-
-> Point the id at a **folder**, not a single file. Don't URL-encode spaces
-> in the config field, type them normally.
-
-#### ⚠️ Metadata limitation
-
-Media Source hands the slideshow **URLs**, not files, so there is **no EXIF
-to read**. For Media Source albums this means:
-
-- **no date filter / date ordering** (no capture or upload date)
-- **no GPS `latitude` / `longitude` / `location`**
-- **no description caption**
-
-This is the same limitation as the Google Photos provider. If your photos
-are local files (for example a NAS folder mounted under `/media`), use the
-**Local Folder** provider instead of Media Source to get full EXIF-based
-dates, location, and description captions.
-
----
-
-## 🧩 Entities Created
-
-Each album you configure creates the following entities in Home Assistant.
-
----
-
-### 📷 Camera
-
-| Entity | Description |
-|--------|------------|
-| Slideshow camera | The live slideshow feed rendered according to your current settings |
-
----
-
-### 🔘 Buttons
-
-| Entity | Description |
-|--------|------------|
-| Previous slide | Steps back to the previously shown image |
-| Next slide | Immediately advances to the next image |
-| Refresh album | Re-fetches album contents |
-| Hide current photo | Excludes a single displayed photo from this slideshow; pairs require an explicit choice in the card or action |
-| Undo hide | Restores the most recent hide action |
-
----
-
-### 📊 Sensors
-
-| Entity | Source | Description |
-|--------|--------|-------------|
-| Album title | All | Title of the source album |
-| Media count | All | Number of images currently available |
-| Hidden photos | All | Number of persisted exclusions for this slideshow |
-| Image cache usage *(diagnostic)* | All | Current download cache size in MB |
-| Enrichment progress *(diagnostic)* | Local folder / Immich / Nextcloud / Ente | Percent of items whose metadata has been processed (EXIF/GPS for local folder and Nextcloud, per-asset detail for Immich, reverse-geocoding for Ente). Attributes include `phase`, `exif_done`/`exif_total`, `geocode_done`/`geocode_total`. |
-
----
-
-### 📋 Camera Attributes
-
-The slideshow camera exposes per-frame metadata as attributes (use with `state_attr('camera.x', '<name>')` in templates):
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `album_title` | string | Title of the source album |
-| `media_count` | int | Photos in the active playlist (after date filter and exclusions) |
-| `media_count_total` | int | Total photos available before filtering |
-| `current_index` | int | Index of the current slide |
-| `current_filename` | string \| null | Source filename when known |
-| `current_url` | string \| null | URL of the current slide. For Ente this is an internal `ente://<id>` reference, since the image is decrypted locally rather than fetched from a URL |
-| `current_is_portrait` | bool \| null | Orientation of the current slide |
-| `captured_at` | string \| list \| null | ISO-8601 capture date. List of `[primary, partner]` when paired (top/left first). For local files this is read from EXIF (or the file's mtime as a fallback). |
-| `captured_at_primary` | string \| null | Capture date of the primary image only |
-| `uploaded_at` | string \| null | ISO-8601 date when added to the album (Google Photos only) |
-| `byte_size` | int \| null | Original file size in bytes (Google Photos only) |
-| `latitude` | float \| null | GPS latitude in decimal degrees (local folder + Immich) |
-| `longitude` | float \| null | GPS longitude in decimal degrees (local folder + Immich) |
-| `location` | string \| null | Reverse-geocoded label (e.g. `"Lisbon, Portugal"`). Empty when reverse-geocoding is disabled or has not yet completed for this file. |
-| `description` | string \| null | Free-text photo caption. From EXIF `ImageDescription` / IPTC `Caption-Abstract` / XMP `dc:description` (local folder), or the Immich photo description (Immich provider). |
-| `caption_frames` | list | Structured per-image caption metadata: one entry for a normal slide, two (top/left first) for a pair. Each entry has `captured_at`, `location`, `latitude`, `longitude`, `description`. Used by the card's caption overlay. |
-| `pair_orientation` | string \| null | How a paired slide is split: `horizontal` (left/right) or `vertical` (top/bottom). `null` for single slides. |
-| `paused` | bool | Whether the slideshow is paused |
-| `date_filter` | string | Active date filter mode |
-| `frame_id` | int | Monotonic counter incremented on every committed slide. Used by the [card](#-album-slideshow-card) to detect new frames |
-| `entry_id` | string | Config entry ID for slideshow actions |
-| `displayed_photo_ids` | list | Opaque IDs for the rendered photo(s), first = left/top. An unavailable ID is `null`; an empty list means no ready photo |
-| `hidden_photo_count` | int | Number of persisted exclusions, including photos no longer in the source album |
-| `hidden_revision` | int | Persisted exclusion-list revision; changes when exclusions change, allowing cards to discard stale frames |
-| `undo_hide_available` | bool | Whether the last hide action can be undone |
-| `empty_reason` | string \| null | `all_hidden` or `no_matching_photos` when the playlist is empty |
-| `navigation_buffer_size` | int | Configured number of fully rendered slides retained in each direction |
-| `previous_frames_cached` | int | Previous rendered frames currently available for immediate navigation |
-| `next_frames_preloaded` | int | Upcoming rendered frames currently available for immediate navigation |
-| `navigation_preloading` | bool | Whether the background worker is currently filling the upcoming-frame buffer |
-| `last_navigation_outcome` | string \| null | Result of the latest manual action: `pending`, `displayed`, `not_available`, or `error` |
-| `last_navigation_error` | string \| null | Error from the latest manual navigation attempt, when present |
-
----
-
-## 🎞 Album Slideshow Card
-
-The integration ships with a custom Lovelace card that does the slide-to-slide transition entirely in the browser. The server only renders one still per slide change; the card cross-fades in CSS, which the browser composites on the GPU. Result: a smooth dissolve on a Pi 4, even with several albums on screen.
-
-The card is registered automatically when the integration loads; you do **not** need to add it as a HACS frontend repository or configure a Lovelace resource manually. After installing or upgrading, hard-refresh the dashboard once (Ctrl+Shift+R) so the browser picks up the script.
-
-A visual editor is available - pick **Album Slideshow** from the card picker in Lovelace and the form will appear automatically.
-
-### Minimal example
+### Minimal Example
 
 ```yaml
 type: custom:album-slideshow-card
 entity: camera.album_slideshow_living_room
 ```
 
-### Full options
+Replace the example entity with your slideshow camera.
 
-```yaml
-type: custom:album-slideshow-card
-entity: camera.album_slideshow_living_room
-transition: random          # random | none | fade | slide-left
-                            #   | slide-right | slide-up | slide-down
-                            #   | wipe-left | wipe-right | zoom
-duration: 800               # ms; CSS transition length
-easing: ease-in-out         # any CSS timing function (ease, linear, cubic-bezier(...))
-aspect_ratio: 16/9          # CSS aspect-ratio value (16/9, 4/3, 1/1, auto)
-fit: auto                   # auto | cover | contain
-                            # auto inherits the camera's fill_mode (cover / contain / blur)
-background: '#000'          # color shown behind contained images
-tap_action: none            # none | more-info
-photo_controls: on_demand
-caption:                    # overlay the photo's date, location and/or description
-  show: [date, location]    #   any of: date, location, description (order = display order)
-  position: bottom-left     #   top/center/bottom + -left/-center/-right, or center
-  date_format: medium       #   medium | full | month_year | year | numeric
-                            #     | weekday | relative, or a custom token string
-                            #     (YYYY, MMMM, MMM, MM, M, DD, D, dddd, ddd, REL)
-  per_image: true           #   caption each half of a portrait pair separately
-  color: '#ffffff'          #   any CSS color
-  font_size: 14px           #   any CSS size
-  font_weight: medium       #   light | normal | medium | semibold | bold
-  shadow: true              #   drop shadow for readability on bright photos
-```
+<a id="full-options"></a><a id="notes-6"></a><a id="-transitions"></a>
+See the [Card Guide](docs/card-guide.md#full-options) for full YAML options,
+transitions, and captions.
 
-### Notes
+### Hide Photos From a Slideshow
 
-- `transition: random` picks a different effect per slide and avoids repeating the previous one.
-- `fit: auto` reads the camera's `fill_mode` attribute. `blur` renders the slide as `contain` plus a blurred backdrop layer behind it.
-- `photo_controls` defaults to Off. See [Hide Photos From a Slideshow](#hide-photos-from-a-slideshow) for toolbar modes, gestures, paired-photo choices, and restore behavior.
-- **Caption overlay:** omit the `caption:` block (or set `show: []`) to disable it. The date comes from `captured_at`; `location` and `description` come from photo metadata. Location and description are available with the **Local Folder** and **Immich** providers (they are simply skipped when a photo has none); Google Photos and Media Source slides show only the date. On a portrait pair, `per_image: true` anchors each photo's own date/location/description to its half; set it to `false` for a single caption over the whole frame.
-- `date_format` accepts a preset name or a custom token string. Presets are locale-aware (they follow your Home Assistant language). Example custom format: `'D MMMM YYYY'` -> `29 July 2023`. The `REL` token inserts relative time, so `'D MMMM YYYY - REL'` -> `29 July 2023 - 3 years ago`.
-- Every slide commit increments the camera's `frame_id` attribute. The card cache-busts the camera proxy URL with that value, so the browser refetches a fresh JPEG on every change instead of serving a stale cached image.
-- If the entity is unavailable, the card shows a "Camera not ready" placeholder.
+In the card editor, choose **Interaction > Photo controls > On demand** or
+**Always**. Displayed-card controls are **Off** by default.
 
----
+Hide either photo in a pair or both, undo the last hide, and restore photos from
+the hidden list. Exclusions persist per slideshow and never change the source
+library. See the [hide/restore guide](docs/card-guide.md#hide-photos-from-a-slideshow)
+for gestures, paired-photo choices, and storage safeguards.
 
-## 🎨 Transparent Divider
+## Settings and Automation
 
-To remove visible spacing between paired images:
+<a id="-runtime-configuration"></a><a id="-filter--order-by-date"></a>
+- [Runtime settings](docs/reference.md#runtime-configuration): timing, ordering, date filters, resolution, and cache limits.
 
-1. Set **Pair divider color** to `transparent`
-2. Keep divider size greater than `0`
+<a id="-smart-rendering-engine"></a><a id="orientation-mismatch-handling"></a><a id="fill-modes"></a><a id="layout-options"></a><a id="-transparent-divider"></a>
+- [Rendering options](docs/reference.md#rendering-options): pairing, fill modes, aspect ratios, and transparent dividers.
 
-Also accepted values:
-- `none`
-- `clear`
-- `rgba(0,0,0,0)`
-- `transperant` common misspelling
+<a id="-pause--resume"></a>
+- [Pause and navigation](docs/reference.md#pause-and-navigation): manual navigation while paused and the rendered-frame buffer.
 
-When transparency is used, the integration outputs PNG to preserve alpha.
+<a id="-entities-created"></a><a id="-camera"></a><a id="-buttons"></a><a id="-sensors"></a>
+- [Entities](docs/reference.md#entities-created): camera, buttons, and diagnostic sensors.
 
----
+<a id="-camera-attributes"></a>
+- [Camera attributes](docs/reference.md#camera-attributes): photo metadata, exclusion state, and navigation status.
 
-## ⚠️ Limitations
+<a id="automation-actions"></a>
+- [Automation actions](docs/reference.md#automation-actions): navigation, refresh, hide/undo/restore, and paginated hidden-photo lists.
 
-### Google Photos
+<a id="️-limitations"></a><a id="general"></a>
+## Limitations and Troubleshooting
 
-- Public shared albums only (link sharing must be enabled)
-- Up to 20,000 photos per album
-- Videos are skipped
-- Internet connection required
-- Relies on Google's public web endpoints; if Google changes them, the integration falls back to a 300-photo limit until the scraper is updated
-- The last successful album fetch is cached to disk; if a refresh fails or returns no photos, the slideshow keeps running with the cached list
+- Still images only; video playback is not supported.
+- <a id="-exif--location-local--nas--immich--photoprism--synology--nextcloud--ente"></a>Metadata varies by source. See [provider capabilities](docs/provider-setup.md#choose-a-provider) and the [EXIF privacy settings](docs/provider-setup.md#exif-capture-date-and-location).
+- HEIC/HEIF support depends on the codecs available in your Home Assistant installation.
+- <a id="google-photos-1"></a>See [Google Photos limits](docs/provider-setup.md#google-photos-limits), including the scraper fallback and cached albums.
+- <a id="immich-1"></a>See [Immich requirements](docs/provider-setup.md#immich-limits) and [legacy iCloud troubleshooting](docs/provider-setup.md#troubleshooting-slow-legacy-albums).
+- Renaming a local file or reimporting an asset can change its identity. See [photo identity and exclusions](docs/card-guide.md#storage-and-photo-identity).
 
-### Immich
+<a id="️-support"></a>
+## Support
 
-- Requires an Immich server reachable from Home Assistant and an API key
-- Videos are skipped
-- Home Assistant fetches and re-serves images, so the Immich server does not need to be reachable from the dashboard client (and the API key never leaves the server)
-- Location and description are read per photo in the background, so they appear shortly after the first load
+Ask questions in the [community forum](https://community.home-assistant.io/t/album-slideshow-google-photos-local/996986)
+or report problems on [GitHub Issues](https://github.com/eyalgal/album_slideshow/issues).
+Include your Home Assistant version, integration version, provider, and steps
+to reproduce. See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
-### General
-
-- Images only  
-- No video support  
-
----
-
-## ❤️ Support
-
-If you enjoy this card and want to support its development:
+If you find the integration useful, you can support its development:
 
 <a href="https://coff.ee/eyalgal" target="_blank">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="60">
