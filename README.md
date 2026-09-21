@@ -38,6 +38,8 @@ All behavior is exposed as Home Assistant entities. Adjust everything live witho
 - Configurable slide interval
 - Manual previous / next slide buttons
 - Album refresh control
+- Hide and restore photos per slideshow without changing the source library
+- Optional on-demand or always-visible navigation and photo-management controls
 
 ### 🖼 Image Sources
 - **Google Photos** shared albums
@@ -147,6 +149,8 @@ the icon follows the actual Home Assistant state. **Refresh album** stays in the
 editor's Actions section.
 
 With **On demand**, the displayed photo stays steady while choosing an action.
+This holds only that card's display; other cards continue normally unless you
+use **Pause/Resume** to pause the slideshow itself.
 The toolbar dismisses immediately when the mouse leaves the card. It also dismisses
 after five seconds of inactivity, a click outside the card, or Escape.
 It stays open while a dialog or action is active, or while it has
@@ -169,11 +173,19 @@ frames, so navigation cannot bring back hidden photos. Safe rendered frames are
 reused immediately and the upcoming buffer is refilled in the background. If every
 ready pair includes the hidden photo, the surviving half can be reused as a single
 photo without fetching its source again. That replacement retains the pair's crop
-until a normal full-source frame is shown.
+and detail until a normal full-source frame is shown. If no safe cached frame or
+half is available, preparing a replacement still requires a new render. Downloads
+from another slideshow no longer block hide/restore behind the shared
+image-processing lock; image-processing jobs remain serialized across albums.
 
 Hiding the last eligible photo clears the display;
 undo and management controls remain available. The **Hidden photos** sensor shows
 the exclusion count without exposing the full list in entity history.
+
+Exclusions are loaded before the slideshow starts. If they cannot be loaded,
+setup fails instead of displaying photos without applying the hidden list. A
+failed save leaves the existing exclusions unchanged. Check **Settings > System >
+Logs** for the error and retry after resolving the storage problem.
 
 Photo IDs come from the source, not filenames or expiring download URLs. Local
 files use normalized full paths: renaming or moving a file changes its identity.
@@ -182,19 +194,36 @@ a usable ID cannot be hidden; refresh an older cached album to obtain IDs. Once
 a slideshow has exclusions, unidentified photos are skipped rather than risk
 redisplaying a hidden photo.
 
-Automation actions use the camera's `entry_id` attribute:
+### Automation Actions
+
+Every action below requires `entry_id` in its `data`, using the camera's
+`entry_id` attribute. This is the configured slideshow's ID, not its camera
+entity ID.
 
 | Action | Additional fields |
 |--------|-------------------|
+| `album_slideshow.previous_slide` | None; shows the previous cached frame |
+| `album_slideshow.next_slide` | None; advances to the next frame, including while paused |
+| `album_slideshow.refresh_album` | None; re-fetches the source album |
 | `album_slideshow.hide_photo` | Optional `photo_ids` list from `displayed_photo_ids`, or `position`: `first`, `second`, `both`. Optional `frame_id` rejects a stale current-frame action. |
 | `album_slideshow.undo_hide` | None |
 | `album_slideshow.restore_photos` | `photo_ids` list |
 | `album_slideshow.restore_all_photos` | None; makes all excluded photos eligible again |
-| `album_slideshow.list_hidden_photos` | Optional `offset` and `limit` (1-100); returns `photos` and `total` as response data |
+| `album_slideshow.list_hidden_photos` | Optional `offset` (default 0) and `limit` (default 50, range 1-100); returns `photos`, `total`, and `offset` as response data |
 
 The **Hide current photo** button handles single-photo slides. For pairs, use
 the card controls or specify a position/IDs in the action. ID-based actions target
 the chosen photo even if the slideshow advances before the request arrives.
+
+`list_hidden_photos` requires a response: set `response_variable` when calling
+it from a script or automation. Each entry in `photos` contains `photo_id`,
+`name` (the source filename when available, otherwise an ID-based label), and
+`in_album` (whether the photo is still in the cached source album). `total` is
+the full exclusion count, not the page length. Increase `offset` to fetch the
+next page; pass the returned `photo_id` values to `restore_photos`.
+
+Pause/Resume uses the existing **Pause slideshow** switch with `switch.turn_on` /
+`switch.turn_off`, not a separate slideshow action.
 
 ---
 
@@ -206,21 +235,27 @@ Album Slideshow Camera is available in **HACS**.
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=eyalgal&repository=album_slideshow)
 
+### Upgrading to v1.11.0
+
+In **HACS > Album Slideshow > three-dot menu > Redownload**, choose **v1.11.0**,
+then restart Home Assistant and reload the dashboard. Existing slideshow entries
+do not need to be recreated. Displayed-card controls are off by default; enable
+**Interaction > Photo controls > On demand** or **Always** in the card editor.
+
+The stable release uses the same code and ZIP as the final v1.11.0 pre-release
+(`0bcfed2`). Earlier v1.11.0 test builds used the same version number, so
+redownload v1.11.0 if you installed an earlier build or are unsure which one you
+have. A restart alone does not download the fixes. Existing hidden lists and
+`photo_controls: true` / `false` settings are preserved.
 
 ### Manual Installation
 
-1. Download the latest release  
-2. Copy  
-```
-custom_components/album_slideshow
-```
-into
-```
-config/custom_components/
-```
-
-3. Restart Home Assistant  
-4. Add the integration from **Devices & services**
+1. Download `album_slideshow.zip` from the latest release.
+2. Extract its contents into `config/custom_components/album_slideshow/`.
+  The ZIP contains the component files at its root, so `manifest.json` must
+  end up directly inside that folder, not another nested directory.
+3. Restart Home Assistant and reload the dashboard after an upgrade.
+4. For a first installation, add the integration from **Devices & services**.
 
 ---
 
@@ -791,6 +826,7 @@ The slideshow camera exposes per-frame metadata as attributes (use with `state_a
 | `entry_id` | string | Config entry ID for slideshow actions |
 | `displayed_photo_ids` | list | Opaque IDs for the rendered photo(s), first = left/top. An unavailable ID is `null`; an empty list means no ready photo |
 | `hidden_photo_count` | int | Number of persisted exclusions, including photos no longer in the source album |
+| `hidden_revision` | int | Persisted exclusion-list revision; changes when exclusions change, allowing cards to discard stale frames |
 | `undo_hide_available` | bool | Whether the last hide action can be undone |
 | `empty_reason` | string \| null | `all_hidden` or `no_matching_photos` when the playlist is empty |
 | `navigation_buffer_size` | int | Configured number of fully rendered slides retained in each direction |
@@ -850,6 +886,7 @@ caption:                    # overlay the photo's date, location and/or descript
 
 - `transition: random` picks a different effect per slide and avoids repeating the previous one.
 - `fit: auto` reads the camera's `fill_mode` attribute. `blur` renders the slide as `contain` plus a blurred backdrop layer behind it.
+- `photo_controls` defaults to Off. See [Hide Photos From a Slideshow](#hide-photos-from-a-slideshow) for toolbar modes, gestures, paired-photo choices, and restore behavior.
 - **Caption overlay:** omit the `caption:` block (or set `show: []`) to disable it. The date comes from `captured_at`; `location` and `description` come from photo metadata. Location and description are available with the **Local Folder** and **Immich** providers (they are simply skipped when a photo has none); Google Photos and Media Source slides show only the date. On a portrait pair, `per_image: true` anchors each photo's own date/location/description to its half; set it to `false` for a single caption over the whole frame.
 - `date_format` accepts a preset name or a custom token string. Presets are locale-aware (they follow your Home Assistant language). Example custom format: `'D MMMM YYYY'` -> `29 July 2023`. The `REL` token inserts relative time, so `'D MMMM YYYY - REL'` -> `29 July 2023 - 3 years ago`.
 - Every slide commit increments the camera's `frame_id` attribute. The card cache-busts the camera proxy URL with that value, so the browser refetches a fresh JPEG on every change instead of serving a stale cached image.
