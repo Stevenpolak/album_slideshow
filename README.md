@@ -75,12 +75,8 @@ sources provide dates, locations, and descriptions.
 ### Updating
 
 Update through HACS, restart Home Assistant, and reload the dashboard.
-Existing slideshow entries do not need to be recreated. To reinstall a specific
-version, use **HACS > Album Slideshow > three-dot menu > Redownload**.
-
-Coming from a v1.11.0 test build? See the
-[v1.11.0 upgrade notes](https://github.com/eyalgal/album_slideshow/releases/tag/v1.11.0)
-to make sure you have the final build. A restart alone does not download updates.
+See the [release notes](https://github.com/eyalgal/album_slideshow/releases)
+for version-specific upgrade instructions.
 
 <a id="-album-slideshow-card"></a>
 ## Add a Dashboard Card
