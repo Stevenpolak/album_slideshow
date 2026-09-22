@@ -111,6 +111,19 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _item_focus(item: MediaItem | None) -> tuple[float, float] | None:
+    """Return a validated normalised crop focus stored on a media item."""
+    if item is None:
+        return None
+    x = getattr(item, "focus_x", None)
+    y = getattr(item, "focus_y", None)
+    if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        return None
+    if not 0 <= x <= 1 or not 0 <= y <= 1:
+        return None
+    return (float(x), float(y))
+
+
 class _DownloadCache:
     """Byte-budget LRU cache for downloaded image data, O(1) per operation."""
 
@@ -1183,6 +1196,7 @@ class AlbumSlideshowCamera(Camera):
                         composed = await self._async_image_job(
                             ip.pair_images, img, other_img, width, height, fill_mode,
                             is_portrait_canvas, divider, divider_fill, transparent_divider,
+                            _item_focus(cur), _item_focus(other_item),
                         )
                         pair_frames = [
                             {
@@ -1203,7 +1217,7 @@ class AlbumSlideshowCamera(Camera):
                         pair_meta = [f["captured_at"] for f in pair_frames]
                     else:
                         composed = await self._async_image_job(
-                            ip.render_image, img, fill_mode, width, height,
+                            ip.render_image, img, fill_mode, width, height, _item_focus(cur),
                         )
                 finally:
                     ip.safe_close(other_img)
@@ -1226,7 +1240,7 @@ class AlbumSlideshowCamera(Camera):
                 return composed, meta
 
             composed = await self._async_image_job(
-                ip.render_image, img, fill_mode, width, height
+                ip.render_image, img, fill_mode, width, height, _item_focus(cur)
             )
             return composed, {
                 "is_portrait": cur_is_portrait,
@@ -1278,7 +1292,7 @@ class AlbumSlideshowCamera(Camera):
                 if self._index != start:
                     self._do_advance(count, items)
                 composed = await self._async_image_job(
-                    ip.render_image, img, fill_mode, width, height
+                    ip.render_image, img, fill_mode, width, height, _item_focus(cur)
                 )
                 return composed, {
                     "is_portrait": is_portrait_canvas,
@@ -1304,7 +1318,7 @@ class AlbumSlideshowCamera(Camera):
         try:
             cur_is_portrait = ip.is_portrait_item(item, img)
             composed = await self._async_image_job(
-                ip.render_image, img, fill_mode, width, height
+                ip.render_image, img, fill_mode, width, height, _item_focus(item)
             )
             return composed, {
                 "is_portrait": cur_is_portrait,

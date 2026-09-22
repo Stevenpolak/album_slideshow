@@ -429,7 +429,10 @@ def test_merge_prior_enrichment_carries_metadata_by_url():
             longitude=2.0,
             location="Somewhere",
             description="A caption",
+            focus_x=0.25,
+            focus_y=0.10,
             exif_scanned=True,
+            face_scanned=True,
         )
     ]
     new = [_item("file:///a.jpg"), _item("file:///b.jpg")]
@@ -438,10 +441,14 @@ def test_merge_prior_enrichment_carries_metadata_by_url():
     assert new[0].latitude == 1.0
     assert new[0].location == "Somewhere"
     assert new[0].description == "A caption"
+    assert new[0].focus_x == pytest.approx(0.25)
+    assert new[0].focus_y == pytest.approx(0.10)
     assert new[0].exif_scanned is True
+    assert new[0].face_scanned is True
     # New file untouched.
     assert new[1].captured_at is None
     assert new[1].exif_scanned is False
+    assert new[1].face_scanned is False
 
 
 def test_merge_prior_enrichment_does_not_overwrite_fresh_values():
@@ -487,7 +494,10 @@ def test_save_and_load_round_trips_gps_and_scanned_flag():
             longitude=-122.0850,
             location="Mountain View, USA",
             description="Sunset over the harbour",
+            focus_x=0.25,
+            focus_y=0.10,
             exif_scanned=True,
+            face_scanned=True,
             byte_size=4567,
         ),
         _item("file:///unscanned.jpg"),
@@ -504,11 +514,15 @@ def test_save_and_load_round_trips_gps_and_scanned_flag():
     assert out[0].longitude == pytest.approx(-122.0850)
     assert out[0].location == "Mountain View, USA"
     assert out[0].description == "Sunset over the harbour"
+    assert out[0].focus_x == pytest.approx(0.25)
+    assert out[0].focus_y == pytest.approx(0.10)
     assert out[0].exif_scanned is True
+    assert out[0].face_scanned is True
     assert out[0].byte_size == 4567
     # Unscanned item keeps its defaults.
     assert out[1].latitude is None
     assert out[1].exif_scanned is False
+    assert out[1].face_scanned is False
 
 
 # ── geocode opt-out via entry.options ─────────────────────────────────────

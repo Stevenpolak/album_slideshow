@@ -101,8 +101,37 @@ endpoint (with `type` forced to images). Examples:
   exposed to the dashboard client.
 - Capture dates come from the asset list up front, so date filters and date
   ordering work immediately. Location and description are filled in by a
-  background pass (one lightweight call per photo, cached), so they appear
+  background pass, so they appear
   shortly after the first load, the same way local-folder EXIF does.
+
+### Face-aware Cropping
+
+When you select one or more **People** and use **Cover** fill mode, the
+integration uses Immich's recognized-face coordinates to focus the crop on
+those people. This also works when people are combined with albums or
+favorites. With several selected people in a photo, the crop targets the
+center of their combined face region. Each half of a paired slide gets its
+own focus. No new face recognition runs inside Home Assistant.
+
+- Add the optional `face.read` permission to the Immich API key. For photos
+  cropped, rotated, or mirrored inside Immich, also grant `asset.edit.get`
+  so the face coordinates can be mapped back to the downloaded image.
+- Image quality and download behavior are unchanged, including **Original**.
+  Immich's edits are used to interpret face positions, not applied to the
+  displayed image or written back to your library.
+- Focus arrives through background enrichment. Initial slides may use a
+  centered crop until their metadata has been read.
+- Missing permissions, unavailable metadata, or no matching faces fall back
+  to the usual centered crop. Failed lookups retry on the next album refresh;
+  after granting permissions, press **Refresh album** rather than recreating
+  the integration. Existing EXIF metadata and offline playlist caches are kept.
+- **Contain** and **Blur** keep their existing behavior. Album-only,
+  favorites-only, all-photo, and custom-search selections without explicitly
+  selected people keep centered cropping. Generic Media Source cannot provide
+  the required Immich face metadata.
+- A fixed-aspect Cover crop cannot guarantee that every face fits when a
+  group spans too much of the photo. Use **Contain** or **Blur** when retaining
+  the entire photo is more important than filling the frame.
 
 ### Immich Limits
 
