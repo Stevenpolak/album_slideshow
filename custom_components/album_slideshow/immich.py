@@ -22,6 +22,7 @@ API shape (Immich v1.13x / v3, ``/api`` prefix, ``x-api-key`` header):
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -262,16 +263,95 @@ def selected_person_ids(
     return set()
 
 
+def _original_face_box(
+    box: tuple[float, float, float, float],
+    edits: list[dict[str, Any]],
+    original_size: tuple[float, float] | None,
+) -> tuple[float, float, float, float]:
+    points = [(box[0], box[1]), (box[2], box[3])]
+    crop = None
+    for edit in reversed(edits):
+        if not isinstance(edit, dict) or not isinstance(edit.get("parameters"), dict):
+            raise ValueError("Invalid Immich edit metadata")
+        params = edit["parameters"]
+        action = edit.get("action")
+        if action == "rotate":
+            angle = params.get("angle")
+            if angle == 90:
+                points = [(vertical, 1 - horizontal) for horizontal, vertical in points]
+            elif angle == 180:
+                points = [(1 - horizontal, 1 - vertical) for horizontal, vertical in points]
+            elif angle == 270:
+                points = [(1 - vertical, horizontal) for horizontal, vertical in points]
+            elif angle != 0:
+                raise ValueError("Unsupported Immich rotation")
+        elif action == "mirror":
+            axis = params.get("axis")
+            if axis == "horizontal":
+                points = [(horizontal, 1 - vertical) for horizontal, vertical in points]
+            elif axis == "vertical":
+                points = [(1 - horizontal, vertical) for horizontal, vertical in points]
+            else:
+                raise ValueError("Unsupported Immich mirror axis")
+        elif action == "crop" and crop is None:
+            crop = params
+        else:
+            raise ValueError("Unsupported Immich edit")
+    if crop is not None:
+        values = [crop.get(name) for name in ("x", "y", "width", "height")]
+        if original_size is None or any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) for value in values
+        ):
+            raise ValueError("Missing Immich crop dimensions")
+        crop_left, crop_top, crop_width, crop_height = values
+        original_width, original_height = original_size
+        if (
+            crop_left < 0 or crop_top < 0 or crop_width <= 0 or crop_height <= 0
+            or crop_left + crop_width > original_width
+            or crop_top + crop_height > original_height
+        ):
+            raise ValueError("Invalid Immich crop dimensions")
+        points = [
+            ((horizontal * crop_width + crop_left) / original_width,
+             (vertical * crop_height + crop_top) / original_height)
+            for horizontal, vertical in points
+        ]
+    return (
+        min(point[0] for point in points), min(point[1] for point in points),
+        max(point[0] for point in points), max(point[1] for point in points),
+    )
+
+
+def original_image_size(asset: Any) -> tuple[float, float] | None:
+    info = asset.get("exifInfo") if isinstance(asset, dict) else None
+    if not isinstance(info, dict):
+        return None
+    width, height = info.get("exifImageWidth"), info.get("exifImageHeight")
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        or not math.isfinite(value) or value <= 0 for value in (width, height)
+    ):
+        return None
+    if str(info.get("orientation")) in {"5", "6", "7", "8", "-90", "90"}:
+        return (float(height), float(width))
+    return (float(width), float(height))
+
+
 def parse_face_focus(
-    faces: Any, person_ids: set[str]
+    faces: Any,
+    person_ids: set[str],
+    *,
+    edits: list[dict[str, Any]] | None = None,
+    original_size: tuple[float, float] | None = None,
 ) -> tuple[float, float] | None:
     """Return a normalised crop focus for the selected people in an asset.
 
     Immich reports face boxes in the coordinate space described by each
     face's ``imageWidth``/``imageHeight``. Normalising each box makes the
-    focus independent of whether Album Slideshow downloads a preview,
-    full-size derivative or original. When several selected people appear in
-    the same photo, focus on the centre of their combined region.
+    focus independent of resolution. Edited coordinates are mapped back to the
+    unedited image before clamping. When several selected people appear in the
+    same photo, focus on the centre of their combined region.
     """
     if not isinstance(faces, list) or not person_ids:
         return None
@@ -292,24 +372,22 @@ def parse_face_focus(
             face.get("boundingBoxY2"),
         )
         if (
-            not isinstance(width, (int, float))
-            or not isinstance(height, (int, float))
+            any(isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) for value in (width, height, *coords))
             or width <= 0
             or height <= 0
-            or any(not isinstance(value, (int, float)) for value in coords)
         ):
             continue
         x1, y1, x2, y2 = coords
         if x2 <= x1 or y2 <= y1:
             continue
-        boxes.append(
-            (
-                max(0.0, min(1.0, x1 / width)),
-                max(0.0, min(1.0, y1 / height)),
-                max(0.0, min(1.0, x2 / width)),
-                max(0.0, min(1.0, y2 / height)),
-            )
+        box = _original_face_box(
+            (x1 / width, y1 / height, x2 / width, y2 / height),
+            edits or [], original_size,
         )
+        box = tuple(max(0.0, min(1.0, value)) for value in box)
+        if box[2] > box[0] and box[3] > box[1]:
+            boxes.append(box)
 
     if not boxes:
         return None
@@ -455,4 +533,12 @@ class ImmichClient:
 
     async def async_get_faces(self, asset_id: str) -> list[dict[str, Any]]:
         data = await self._get(f"/api/faces?id={asset_id}")
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            raise ValueError("Invalid Immich face response")
+        return data
+
+    async def async_get_asset_edits(self, asset_id: str) -> list[dict[str, Any]]:
+        data = await self._get(f"/api/assets/{asset_id}/edits")
+        if not isinstance(data, dict) or not isinstance(data.get("edits"), list):
+            raise ValueError("Invalid Immich edit response")
+        return data["edits"]

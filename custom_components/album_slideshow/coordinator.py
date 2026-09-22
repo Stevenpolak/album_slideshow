@@ -139,6 +139,7 @@ class MediaItem:
     # an HA restart (the flag round-trips through the items cache).
     exif_scanned: bool = False
     photo_id: str | None = None
+    face_scanned: bool = False
 
     def __post_init__(self) -> None:
         if self.photo_id is None:
@@ -1000,6 +1001,8 @@ def _merge_prior_enrichment(
             item.focus_y = prev.focus_y
         if prev.exif_scanned:
             item.exif_scanned = True
+        if prev.face_scanned:
+            item.face_scanned = True
 
 
 class AlbumCoordinator(DataUpdateCoordinator):
@@ -1007,9 +1010,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
     # v3: added ``description``; forces a re-scan so already-cached items
     # (exif_scanned=True) get their description read instead of being
     # skipped forever.
-    # v4: added Immich face focus coordinates; forces selected-person sources
-    # to query their cached assets once so smart crop starts working.
-    _ITEM_CACHE_VERSION = 4
+    _ITEM_CACHE_VERSION = 3
     # Bump independently of the items cache - the geocode cache is
     # keyed by coordinate and is safe to keep across item-shape changes.
     _GEOCODE_CACHE_VERSION = 1
@@ -1156,10 +1157,22 @@ class AlbumCoordinator(DataUpdateCoordinator):
         finally:
             self._enrichment_task = None
 
+    def _needs_enrichment(self, item: MediaItem) -> bool:
+        if not item.exif_scanned:
+            return True
+        if self.provider != PROVIDER_IMMICH or item.face_scanned:
+            return False
+        from . import immich as immich_api
+
+        return bool(immich_api.selected_person_ids(
+            self.entry.data.get(CONF_IMMICH_SELECTION_TYPE),
+            self.entry.data.get(CONF_IMMICH_SELECTION_ID),
+        ))
+
     def _schedule_enrichment(self, data: dict[str, Any]) -> None:
         """Kick off the background EXIF + geocode worker if there's work."""
         items: list[MediaItem] = data.get("items") or []
-        unscanned = [it for it in items if not it.exif_scanned]
+        unscanned = [it for it in items if self._needs_enrichment(it)]
         # Providers that decrypt/return GPS inline (Ente) have nothing to scan
         # but still need the coordinates turned into a place label.
         needs_geocode = any(
@@ -1226,6 +1239,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     focus_y=raw.get("focus_y"),
                     exif_scanned=bool(raw.get("exif_scanned", False)),
                     photo_id=raw.get("photo_id"),
+                    face_scanned=bool(raw.get("face_scanned", False)),
                 ))
             except Exception:
                 continue
@@ -1261,6 +1275,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     "focus_y": it.focus_y,
                     "exif_scanned": it.exif_scanned,
                     "photo_id": it.photo_id,
+                    "face_scanned": it.face_scanned,
                 }
                 for it in items
             ],
@@ -2198,39 +2213,65 @@ class AlbumCoordinator(DataUpdateCoordinator):
             self.entry.data.get(CONF_IMMICH_SELECTION_ID),
         )
 
-        requests = [client.async_get_asset(item.source_id)]
-        if person_ids:
-            requests.append(client.async_get_faces(item.source_id))
-        results = await asyncio.gather(*requests, return_exceptions=True)
+        requests = {}
+        needs_faces = bool(person_ids) and not item.face_scanned
+        if not item.exif_scanned or needs_faces:
+            requests["asset"] = client.async_get_asset(item.source_id)
+        if needs_faces:
+            requests["faces"] = client.async_get_faces(item.source_id)
+        results = await asyncio.gather(*requests.values(), return_exceptions=True)
+        asset = None
 
-        asset = results[0]
-        if isinstance(asset, Exception):
-            _LOGGER.debug("Immich: failed to fetch asset %s: %s", item.source_id, asset)
-        else:
-            info = immich_api.parse_asset_exif(asset)
-            if "captured_at" in info:
-                item.captured_at = info["captured_at"]
-            if "latitude" in info and "longitude" in info:
-                item.latitude = info["latitude"]
-                item.longitude = info["longitude"]
-            if "location" in info:
-                item.location = info["location"]
-            if "description" in info:
-                item.description = info["description"]
-
-        if person_ids:
-            faces = results[1]
-            if isinstance(faces, Exception):
+        for kind, result in zip(requests, results):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, Exception):
                 _LOGGER.debug(
-                    "Immich: failed to fetch faces for asset %s: %s",
+                    "Immich: failed to fetch %s for asset %s: %s",
+                    kind,
                     item.source_id,
-                    faces,
+                    result,
                 )
+                continue
+            if kind == "asset":
+                if not isinstance(result, dict):
+                    continue
+                asset = result
+                info = immich_api.parse_asset_exif(result)
+                if "captured_at" in info:
+                    item.captured_at = info["captured_at"]
+                if "latitude" in info and "longitude" in info:
+                    item.latitude = info["latitude"]
+                    item.longitude = info["longitude"]
+                if "location" in info:
+                    item.location = info["location"]
+                if "description" in info:
+                    item.description = info["description"]
+                item.exif_scanned = True
             else:
-                focus = immich_api.parse_face_focus(faces, person_ids)
-                if focus is not None:
-                    item.focus_x, item.focus_y = focus
-        item.exif_scanned = True
+                if asset is None:
+                    continue
+                edits = []
+                if asset.get("isEdited"):
+                    try:
+                        edits = await client.async_get_asset_edits(item.source_id)
+                        if not edits:
+                            continue
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _LOGGER.debug("Immich: edit metadata unavailable for asset %s", item.source_id)
+                        continue
+                try:
+                    focus = immich_api.parse_face_focus(
+                        result, person_ids, edits=edits,
+                        original_size=immich_api.original_image_size(asset),
+                    )
+                except (TypeError, ValueError):
+                    _LOGGER.debug("Immich: unsupported face geometry for asset %s", item.source_id)
+                    continue
+                item.focus_x, item.focus_y = focus if focus is not None else (None, None)
+                item.face_scanned = True
 
     async def _enrich_items_background(self, data: dict[str, Any]) -> None:
         """Read EXIF for unscanned local files, then reverse-geocode.
@@ -2250,7 +2291,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
         scanned_since_save = 0
         try:
             for idx, item in enumerate(items):
-                if item.exif_scanned:
+                if not self._needs_enrichment(item):
                     # Fast path: yield occasionally so we don't starve
                     # the event loop when (re-)visiting a long list of
                     # already-processed items.

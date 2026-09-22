@@ -194,6 +194,66 @@ def test_parse_face_focus_ignores_missing_or_invalid_faces():
     assert immich.parse_face_focus(None, {"p1"}) is None
 
 
+@pytest.mark.parametrize(("edits", "box", "dimensions"), [
+    ([{"action": "rotate", "parameters": {"angle": 90}}], (210, 280, 270, 320), (300, 400)),
+    ([{"action": "rotate", "parameters": {"angle": 180}}], (80, 210, 120, 270), (400, 300)),
+    ([{"action": "rotate", "parameters": {"angle": 270}}], (30, 80, 90, 120), (300, 400)),
+    ([{"action": "mirror", "parameters": {"axis": "horizontal"}}], (280, 210, 320, 270), (400, 300)),
+    ([{"action": "mirror", "parameters": {"axis": "vertical"}}], (80, 30, 120, 90), (400, 300)),
+    ([{"action": "crop", "parameters": {"x": 200, "y": 0, "width": 200, "height": 150}}],
+     (80, 30, 120, 90), (200, 150)),
+    ([{"action": "crop", "parameters": {"x": 200, "y": 0, "width": 200, "height": 150}},
+      {"action": "rotate", "parameters": {"angle": 90}}], (60, 80, 120, 120), (150, 200)),
+    ([{"action": "crop", "parameters": {"x": 200, "y": 0, "width": 200, "height": 150}},
+      {"action": "rotate", "parameters": {"angle": 90}},
+      {"action": "mirror", "parameters": {"axis": "vertical"}}], (30, 80, 90, 120), (150, 200)),
+])
+def test_parse_face_focus_inverts_immich_edits(edits, box, dimensions):
+    face = _face("p1", *box, width=dimensions[0], height=dimensions[1])
+    focus = immich.parse_face_focus([face], {"p1"}, edits=edits, original_size=(400, 300))
+    assert focus == pytest.approx((0.75, 0.2))
+
+
+def test_parse_face_focus_unedits_before_clamping():
+    face = _face("p1", -100, 30, -60, 90, width=200, height=150)
+    edits = [{"action": "crop", "parameters": {"x": 200, "y": 0, "width": 200, "height": 150}}]
+    assert immich.parse_face_focus(
+        [face], {"p1"}, edits=edits, original_size=(400, 300)
+    ) == pytest.approx((0.3, 0.2))
+
+
+@pytest.mark.parametrize("edit", [
+    {"action": "rotate", "parameters": {"angle": 45}},
+    {"action": "mirror", "parameters": {"axis": "invalid"}},
+    {"action": "future-edit", "parameters": {}},
+    {"action": "crop", "parameters": {"x": -1, "y": 0, "width": 100, "height": 100}},
+    {"action": "crop", "parameters": {"x": 0, "y": 0, "width": 900, "height": 100}},
+    {"action": "crop", "parameters": {"x": 0, "y": 0, "width": float("nan"), "height": 100}},
+    {"action": "crop", "parameters": None},
+])
+def test_parse_face_focus_rejects_unknown_or_invalid_edits(edit):
+    with pytest.raises(ValueError):
+        immich.parse_face_focus([_face("p1", 10, 10, 20, 20)], {"p1"}, edits=[edit], original_size=(400, 300))
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), True, "100"])
+def test_parse_face_focus_rejects_invalid_numbers(invalid):
+    face = _face("p1", invalid, 10, 20, 20)
+    assert immich.parse_face_focus([face], {"p1"}) is None
+
+
+@pytest.mark.parametrize("orientation", ["5", "6", "7", "8", "-90", "90", 6])
+def test_original_image_size_honors_exif_orientation(orientation):
+    asset = {"exifInfo": {"exifImageWidth": 400, "exifImageHeight": 300, "orientation": orientation}}
+    assert immich.original_image_size(asset) == (300, 400)
+
+
+def test_original_image_size_fallback():
+    assert immich.original_image_size({"exifInfo": {"exifImageWidth": 400, "exifImageHeight": 300}}) == (400, 300)
+    assert immich.original_image_size({}) is None
+    assert immich.original_image_size({"exifInfo": {"exifImageWidth": 0, "exifImageHeight": 300}}) is None
+
+
 # ── parse_random ───────────────────────────────────────────────────────────
 
 def test_parse_random_plain_list():
