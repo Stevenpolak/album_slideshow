@@ -311,11 +311,13 @@ endpoint (with `type` forced to images). Examples:
   ordering work immediately. Location and description are filled in by a
   background pass, so they appear shortly after the first load, the same way
   local-folder EXIF does.
-- When the source includes selected people and the fill mode is **Cover**, the
-  same background pass reads Immich's recognized-face coordinates and focuses
-  each crop on the selected people. Group photos use the centre of the combined
-  selected-face region. Missing faces or unavailable `face.read` permission
-  fall back to the normal centred crop. Face focus requires the direct Immich
+- When the fill mode is **Cover**, the same background pass reads Immich's
+  detected-face coordinates and focuses each crop on the faces in the photo.
+  This works for every Immich source (albums, people, favorites, searches).
+  If the source includes selected people and they appear in the photo, only
+  their faces are used; otherwise all detected faces count. Group photos use
+  the centre of the combined face region. Photos without faces or unavailable
+  `face.read` permission fall back to the normal centred crop. Face focus requires the direct Immich
   provider; Home Assistant's generic Media Source does not expose asset and
   face metadata.
 

@@ -15,7 +15,7 @@ API shape (Immich v1.13x / v3, ``/api`` prefix, ``x-api-key`` header):
 - ``GET /api/assets/{id}`` -> full asset incl ``exifInfo`` (lat/long, city,
     country, description) - used to enrich location/description per asset.
 - ``GET /api/faces?id={id}`` -> recognised faces and bounding boxes - used to
-    focus cover-mode crops when the source contains selected people.
+    focus cover-mode crops (selected people first, else any face).
 - Image bytes: ``/api/assets/{id}/thumbnail?size=preview|fullsize`` or
     ``/api/assets/{id}/original`` (all require the ``x-api-key`` header).
 """
@@ -262,55 +262,67 @@ def selected_person_ids(
     return set()
 
 
+def _normalised_face_box(face: Any) -> tuple[float, float, float, float] | None:
+    """Return a face's bounding box normalised to 0..1, or None if invalid."""
+    if not isinstance(face, dict):
+        return None
+    width = face.get("imageWidth")
+    height = face.get("imageHeight")
+    coords = (
+        face.get("boundingBoxX1"),
+        face.get("boundingBoxY1"),
+        face.get("boundingBoxX2"),
+        face.get("boundingBoxY2"),
+    )
+    if (
+        not isinstance(width, (int, float))
+        or not isinstance(height, (int, float))
+        or width <= 0
+        or height <= 0
+        or any(not isinstance(value, (int, float)) for value in coords)
+    ):
+        return None
+    x1, y1, x2, y2 = coords
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return (
+        max(0.0, min(1.0, x1 / width)),
+        max(0.0, min(1.0, y1 / height)),
+        max(0.0, min(1.0, x2 / width)),
+        max(0.0, min(1.0, y2 / height)),
+    )
+
+
 def parse_face_focus(
-    faces: Any, person_ids: set[str]
+    faces: Any, person_ids: set[str] | None = None
 ) -> tuple[float, float] | None:
-    """Return a normalised crop focus for the selected people in an asset.
+    """Return a normalised crop focus for the faces in an asset.
 
     Immich reports face boxes in the coordinate space described by each
     face's ``imageWidth``/``imageHeight``. Normalising each box makes the
     focus independent of whether Album Slideshow downloads a preview,
-    full-size derivative or original. When several selected people appear in
-    the same photo, focus on the centre of their combined region.
+    full-size derivative or original.
+
+    When ``person_ids`` is given and any of those people appear in the photo,
+    only their faces are used, so bystanders don't pull the crop away.
+    Otherwise every detected face counts, including faces Immich has not
+    linked to a named person. The focus is the centre of the combined region.
     """
-    if not isinstance(faces, list) or not person_ids:
+    if not isinstance(faces, list):
         return None
 
-    boxes: list[tuple[float, float, float, float]] = []
+    selected: list[tuple[float, float, float, float]] = []
+    everyone: list[tuple[float, float, float, float]] = []
     for face in faces:
-        if not isinstance(face, dict):
+        box = _normalised_face_box(face)
+        if box is None:
             continue
+        everyone.append(box)
         person = face.get("person")
-        if not isinstance(person, dict) or person.get("id") not in person_ids:
-            continue
-        width = face.get("imageWidth")
-        height = face.get("imageHeight")
-        coords = (
-            face.get("boundingBoxX1"),
-            face.get("boundingBoxY1"),
-            face.get("boundingBoxX2"),
-            face.get("boundingBoxY2"),
-        )
-        if (
-            not isinstance(width, (int, float))
-            or not isinstance(height, (int, float))
-            or width <= 0
-            or height <= 0
-            or any(not isinstance(value, (int, float)) for value in coords)
-        ):
-            continue
-        x1, y1, x2, y2 = coords
-        if x2 <= x1 or y2 <= y1:
-            continue
-        boxes.append(
-            (
-                max(0.0, min(1.0, x1 / width)),
-                max(0.0, min(1.0, y1 / height)),
-                max(0.0, min(1.0, x2 / width)),
-                max(0.0, min(1.0, y2 / height)),
-            )
-        )
+        if person_ids and isinstance(person, dict) and person.get("id") in person_ids:
+            selected.append(box)
 
+    boxes = selected or everyone
     if not boxes:
         return None
     left = min(box[0] for box in boxes)

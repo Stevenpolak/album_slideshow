@@ -190,8 +190,22 @@ def test_parse_face_focus_combines_multiple_selected_people():
 def test_parse_face_focus_ignores_missing_or_invalid_faces():
     invalid = _face("p1", 300, 600, 100, 200)
     assert immich.parse_face_focus([invalid], {"p1"}) is None
-    assert immich.parse_face_focus([_face("other", 1, 1, 2, 2)], {"p1"}) is None
+    assert immich.parse_face_focus([], {"p1"}) is None
     assert immich.parse_face_focus(None, {"p1"}) is None
+    assert immich.parse_face_focus(None) is None
+
+
+def test_parse_face_focus_without_selection_uses_all_faces():
+    unnamed = _face("x", 100, 200, 300, 600)
+    unnamed["person"] = None
+    faces = [unnamed, _face("p2", 500, 1000, 700, 1400)]
+    assert immich.parse_face_focus(faces) == pytest.approx((0.4, 0.4))
+    assert immich.parse_face_focus(faces, set()) == pytest.approx((0.4, 0.4))
+
+
+def test_parse_face_focus_falls_back_to_all_faces_when_selected_absent():
+    faces = [_face("other", 100, 200, 300, 600)]
+    assert immich.parse_face_focus(faces, {"p1"}) == pytest.approx((0.2, 0.2))
 
 
 # ── parse_random ───────────────────────────────────────────────────────────

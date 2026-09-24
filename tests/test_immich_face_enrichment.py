@@ -98,7 +98,7 @@ def test_immich_face_failure_keeps_metadata_and_center_fallback(monkeypatch):
     assert item.exif_scanned is True
 
 
-def test_immich_album_only_source_does_not_request_faces(monkeypatch):
+def test_immich_album_only_source_focuses_on_all_faces(monkeypatch):
     class FakeClient:
         def __init__(self, *_args):
             pass
@@ -107,7 +107,26 @@ def test_immich_album_only_source_does_not_request_faces(monkeypatch):
             return {"exifInfo": {}}
 
         async def async_get_faces(self, _asset_id):
-            raise AssertionError("album-only source must not request faces")
+            return [
+                {
+                    "imageWidth": 1000,
+                    "imageHeight": 2000,
+                    "boundingBoxX1": 100,
+                    "boundingBoxY1": 200,
+                    "boundingBoxX2": 300,
+                    "boundingBoxY2": 600,
+                    "person": None,
+                },
+                {
+                    "imageWidth": 1000,
+                    "imageHeight": 2000,
+                    "boundingBoxX1": 500,
+                    "boundingBoxY1": 1000,
+                    "boundingBoxX2": 700,
+                    "boundingBoxY2": 1400,
+                    "person": {"id": "someone", "name": "Someone"},
+                },
+            ]
 
     monkeypatch.setattr(immich, "ImmichClient", FakeClient)
     coord = _coordinator('{"albums": ["a1"], "people": [], "favorites": false}')
@@ -115,5 +134,7 @@ def test_immich_album_only_source_does_not_request_faces(monkeypatch):
 
     asyncio.run(coord._enrich_immich_item(item))
 
-    assert item.focus_x is None
+    # Union of both faces is x=.1..7 and y=.1..7 in normalised coordinates.
+    assert item.focus_x == pytest.approx(0.4)
+    assert item.focus_y == pytest.approx(0.4)
     assert item.exif_scanned is True

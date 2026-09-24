@@ -128,8 +128,8 @@ class MediaItem:
     # background enrichment to fetch per-item metadata.
     source_id: str | None = None
     # Normalised point (0..1 in displayed-image coordinates) that cover-mode
-    # cropping should keep visible. Immich person sources populate this from
-    # the selected person's face bounding box; other sources leave it unset
+    # cropping should keep visible. Immich sources populate this from the
+    # detected faces (selected people first); other sources leave it unset
     # and retain the traditional centred crop.
     focus_x: float | None = None
     focus_y: float | None = None
@@ -1009,7 +1009,9 @@ class AlbumCoordinator(DataUpdateCoordinator):
     # skipped forever.
     # v4: added Immich face focus coordinates; forces selected-person sources
     # to query their cached assets once so smart crop starts working.
-    _ITEM_CACHE_VERSION = 4
+    # v5: face focus for every Immich source, not only person sources;
+    # re-scan so album/favorite/search items pick up their focus.
+    _ITEM_CACHE_VERSION = 5
     # Bump independently of the items cache - the geocode cache is
     # keyed by coordinate and is safe to keep across item-shape changes.
     _GEOCODE_CACHE_VERSION = 1
@@ -2184,7 +2186,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
         return None, {}
 
     async def _enrich_immich_item(self, item: MediaItem) -> None:
-        """Fetch Immich metadata and selected-person face crop focus."""
+        """Fetch Immich metadata and face-aware crop focus."""
         from . import immich as immich_api
 
         url = self.entry.data.get(CONF_IMMICH_URL)
@@ -2198,12 +2200,12 @@ class AlbumCoordinator(DataUpdateCoordinator):
             self.entry.data.get(CONF_IMMICH_SELECTION_ID),
         )
 
-        requests = [client.async_get_asset(item.source_id)]
-        if person_ids:
-            requests.append(client.async_get_faces(item.source_id))
-        results = await asyncio.gather(*requests, return_exceptions=True)
+        asset, faces = await asyncio.gather(
+            client.async_get_asset(item.source_id),
+            client.async_get_faces(item.source_id),
+            return_exceptions=True,
+        )
 
-        asset = results[0]
         if isinstance(asset, Exception):
             _LOGGER.debug("Immich: failed to fetch asset %s: %s", item.source_id, asset)
         else:
@@ -2218,18 +2220,16 @@ class AlbumCoordinator(DataUpdateCoordinator):
             if "description" in info:
                 item.description = info["description"]
 
-        if person_ids:
-            faces = results[1]
-            if isinstance(faces, Exception):
-                _LOGGER.debug(
-                    "Immich: failed to fetch faces for asset %s: %s",
-                    item.source_id,
-                    faces,
-                )
-            else:
-                focus = immich_api.parse_face_focus(faces, person_ids)
-                if focus is not None:
-                    item.focus_x, item.focus_y = focus
+        if isinstance(faces, Exception):
+            _LOGGER.debug(
+                "Immich: failed to fetch faces for asset %s: %s",
+                item.source_id,
+                faces,
+            )
+        else:
+            focus = immich_api.parse_face_focus(faces, person_ids)
+            if focus is not None:
+                item.focus_x, item.focus_y = focus
         item.exif_scanned = True
 
     async def _enrich_items_background(self, data: dict[str, Any]) -> None:
