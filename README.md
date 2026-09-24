@@ -307,6 +307,10 @@ endpoint (with `type` forced to images). Examples:
   appears in the camera's `current_url` attribute or reaches the browser. Home
   Assistant fetches and re-serves the images; your Immich server is never
   exposed to the dashboard client.
+- To change an existing slideshow's albums, people, favorites, filter or image
+  quality, click the cog (**Configure**) on its entry. The slideshow reloads
+  with the new source and keeps its entities, settings and hidden photos. If
+  the stored URL or API key stops working, the same dialog asks for new ones.
 - Capture dates come from the asset list up front, so date filters and date
   ordering work immediately. Location and description are filled in by a
   background pass, so they appear shortly after the first load, the same way
