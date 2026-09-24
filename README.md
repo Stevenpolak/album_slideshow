@@ -316,12 +316,21 @@ endpoint (with `type` forced to images). Examples:
   background pass, so they appear shortly after the first load, the same way
   local-folder EXIF does.
 - When the fill mode is **Cover**, the same background pass reads Immich's
-  detected-face coordinates and focuses each crop on the faces in the photo.
-  This works for every Immich source (albums, people, favorites, searches).
-  If the source includes selected people and they appear in the photo, only
-  their faces are used; otherwise all detected faces count. Group photos use
-  the centre of the combined face region. Photos without faces or unavailable
-  `face.read` permission fall back to the normal centred crop. Face focus requires the direct Immich
+  detected faces, and the crop keeps as many **whole** faces as fit. This
+  works for every Immich source (albums, people, favorites, searches). Each
+  face is padded so hair and chin stay in frame. When faces are too far apart
+  to fit, the largest face wins, and people selected in the source always win
+  over bystanders. Faces that don't fit are left fully out rather than cut in
+  half. Photos without faces, or without `face.read` permission, keep the
+  normal centred crop.
+- Turn on the **Crop debug overlay** switch to check crops on screen. It
+  draws each face (green kept, red cut, grey left out, with a thin outline for
+  the padded area) and a yellow crosshair on the photo's own centre. If the
+  centre was cropped away, a yellow arrow on the edge points to it. A label
+  sums up each slide, e.g. `faces 3 · kept 2 · cut 0 · dropped 1`, or
+  `no face data` when the photo hasn't been scanned. Debug logging for
+  `custom_components.album_slideshow` also logs this summary per photo.
+  Face focus requires the direct Immich
   provider; Home Assistant's generic Media Source does not expose asset and
   face metadata.
 

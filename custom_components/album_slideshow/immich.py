@@ -15,7 +15,7 @@ API shape (Immich v1.13x / v3, ``/api`` prefix, ``x-api-key`` header):
 - ``GET /api/assets/{id}`` -> full asset incl ``exifInfo`` (lat/long, city,
     country, description) - used to enrich location/description per asset.
 - ``GET /api/faces?id={id}`` -> recognised faces and bounding boxes - used to
-    focus cover-mode crops (selected people first, else any face).
+    keep faces whole in cover-mode crops.
 - Image bytes: ``/api/assets/{id}/thumbnail?size=preview|fullsize`` or
     ``/api/assets/{id}/original`` (all require the ``x-api-key`` header).
 """
@@ -293,43 +293,38 @@ def _normalised_face_box(face: Any) -> tuple[float, float, float, float] | None:
     )
 
 
-def parse_face_focus(
+# Weight multiplier for faces of people the source explicitly selected, so
+# the crop keeps them over (even bigger) bystanders.
+SELECTED_FACE_BONUS = 10.0
+
+
+def parse_face_boxes(
     faces: Any, person_ids: set[str] | None = None
-) -> tuple[float, float] | None:
-    """Return a normalised crop focus for the faces in an asset.
+) -> list[list[float]]:
+    """Return every valid face as ``[x1, y1, x2, y2, weight]`` (normalised).
 
     Immich reports face boxes in the coordinate space described by each
-    face's ``imageWidth``/``imageHeight``. Normalising each box makes the
-    focus independent of whether Album Slideshow downloads a preview,
-    full-size derivative or original.
-
-    When ``person_ids`` is given and any of those people appear in the photo,
-    only their faces are used, so bystanders don't pull the crop away.
-    Otherwise every detected face counts, including faces Immich has not
-    linked to a named person. The focus is the centre of the combined region.
+    face's ``imageWidth``/``imageHeight``. Normalising each box makes it
+    independent of whether Album Slideshow downloads a preview, full-size
+    derivative or original. Faces Immich has not linked to a named person
+    are included. The weight is the face's area, multiplied by
+    ``SELECTED_FACE_BONUS`` for people in ``person_ids``; the renderer uses
+    it to decide which faces to keep when they don't all fit.
     """
     if not isinstance(faces, list):
-        return None
-
-    selected: list[tuple[float, float, float, float]] = []
-    everyone: list[tuple[float, float, float, float]] = []
+        return []
+    boxes: list[list[float]] = []
     for face in faces:
         box = _normalised_face_box(face)
         if box is None:
             continue
-        everyone.append(box)
+        x1, y1, x2, y2 = box
+        weight = (x2 - x1) * (y2 - y1)
         person = face.get("person")
         if person_ids and isinstance(person, dict) and person.get("id") in person_ids:
-            selected.append(box)
-
-    boxes = selected or everyone
-    if not boxes:
-        return None
-    left = min(box[0] for box in boxes)
-    top = min(box[1] for box in boxes)
-    right = max(box[2] for box in boxes)
-    bottom = max(box[3] for box in boxes)
-    return ((left + right) / 2, (top + bottom) / 2)
+            weight *= SELECTED_FACE_BONUS
+        boxes.append([x1, y1, x2, y2, weight])
+    return boxes
 
 
 class ImmichClient:

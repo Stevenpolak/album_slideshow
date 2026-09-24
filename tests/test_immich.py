@@ -170,42 +170,26 @@ def _face(person_id, x1, y1, x2, y2, width=1000, height=2000):
     }
 
 
-def test_parse_face_focus_uses_only_selected_person():
+def test_parse_face_boxes_weights_selected_people():
     faces = [
         _face("selected", 100, 200, 300, 600),
-        _face("bystander", 700, 1200, 900, 1600),
+        _face("bystander", 500, 1000, 900, 1800),
     ]
-    assert immich.parse_face_focus(faces, {"selected"}) == (0.2, 0.2)
+    boxes = immich.parse_face_boxes(faces, {"selected"})
+    assert boxes[0] == pytest.approx([0.1, 0.1, 0.3, 0.3, 0.04 * immich.SELECTED_FACE_BONUS])
+    assert boxes[1] == pytest.approx([0.5, 0.5, 0.9, 0.9, 0.16])
 
 
-def test_parse_face_focus_combines_multiple_selected_people():
-    faces = [
-        _face("p1", 100, 200, 300, 600),
-        _face("p2", 500, 1000, 700, 1400),
-    ]
-    # Union is x=.1..7 and y=.1..7 in normalised image coordinates.
-    assert immich.parse_face_focus(faces, {"p1", "p2"}) == pytest.approx((0.4, 0.4))
-
-
-def test_parse_face_focus_ignores_missing_or_invalid_faces():
-    invalid = _face("p1", 300, 600, 100, 200)
-    assert immich.parse_face_focus([invalid], {"p1"}) is None
-    assert immich.parse_face_focus([], {"p1"}) is None
-    assert immich.parse_face_focus(None, {"p1"}) is None
-    assert immich.parse_face_focus(None) is None
-
-
-def test_parse_face_focus_without_selection_uses_all_faces():
+def test_parse_face_boxes_includes_unnamed_faces():
     unnamed = _face("x", 100, 200, 300, 600)
     unnamed["person"] = None
-    faces = [unnamed, _face("p2", 500, 1000, 700, 1400)]
-    assert immich.parse_face_focus(faces) == pytest.approx((0.4, 0.4))
-    assert immich.parse_face_focus(faces, set()) == pytest.approx((0.4, 0.4))
+    assert immich.parse_face_boxes([unnamed]) == [pytest.approx([0.1, 0.1, 0.3, 0.3, 0.04])]
 
 
-def test_parse_face_focus_falls_back_to_all_faces_when_selected_absent():
-    faces = [_face("other", 100, 200, 300, 600)]
-    assert immich.parse_face_focus(faces, {"p1"}) == pytest.approx((0.2, 0.2))
+def test_parse_face_boxes_ignores_invalid_faces():
+    invalid = _face("p1", 300, 600, 100, 200)
+    assert immich.parse_face_boxes([invalid, "junk"], {"p1"}) == []
+    assert immich.parse_face_boxes(None) == []
 
 
 # ── parse_random ───────────────────────────────────────────────────────────

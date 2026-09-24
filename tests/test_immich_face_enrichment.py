@@ -40,7 +40,7 @@ def _item():
     )
 
 
-def test_immich_enrichment_adds_selected_face_focus(monkeypatch):
+def test_immich_enrichment_adds_weighted_face_boxes(monkeypatch):
     class FakeClient:
         def __init__(self, *_args):
             pass
@@ -70,8 +70,8 @@ def test_immich_enrichment_adds_selected_face_focus(monkeypatch):
     asyncio.run(coord._enrich_immich_item(item))
 
     assert item.description == "Portrait"
-    assert item.focus_x == pytest.approx(0.2)
-    assert item.focus_y == pytest.approx(0.2)
+    # Box normalised to the 1000x2000 image; selected person gets the bonus.
+    assert item.faces == [pytest.approx([0.1, 0.1, 0.3, 0.3, 0.04 * immich.SELECTED_FACE_BONUS])]
     assert item.exif_scanned is True
 
 
@@ -93,12 +93,11 @@ def test_immich_face_failure_keeps_metadata_and_center_fallback(monkeypatch):
     asyncio.run(coord._enrich_immich_item(item))
 
     assert item.description == "Still available"
-    assert item.focus_x is None
-    assert item.focus_y is None
+    assert item.faces is None  # unknown, not "no faces"
     assert item.exif_scanned is True
 
 
-def test_immich_album_only_source_focuses_on_all_faces(monkeypatch):
+def test_immich_album_only_source_stores_all_faces(monkeypatch):
     class FakeClient:
         def __init__(self, *_args):
             pass
@@ -134,7 +133,8 @@ def test_immich_album_only_source_focuses_on_all_faces(monkeypatch):
 
     asyncio.run(coord._enrich_immich_item(item))
 
-    # Union of both faces is x=.1..7 and y=.1..7 in normalised coordinates.
-    assert item.focus_x == pytest.approx(0.4)
-    assert item.focus_y == pytest.approx(0.4)
+    assert item.faces == [
+        pytest.approx([0.1, 0.1, 0.3, 0.3, 0.04]),
+        pytest.approx([0.5, 0.5, 0.7, 0.7, 0.04]),
+    ]
     assert item.exif_scanned is True

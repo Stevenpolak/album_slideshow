@@ -429,8 +429,7 @@ def test_merge_prior_enrichment_carries_metadata_by_url():
             longitude=2.0,
             location="Somewhere",
             description="A caption",
-            focus_x=0.25,
-            focus_y=0.10,
+            faces=[[0.1, 0.05, 0.4, 0.15, 0.03]],
             exif_scanned=True,
         )
     ]
@@ -440,8 +439,7 @@ def test_merge_prior_enrichment_carries_metadata_by_url():
     assert new[0].latitude == 1.0
     assert new[0].location == "Somewhere"
     assert new[0].description == "A caption"
-    assert new[0].focus_x == pytest.approx(0.25)
-    assert new[0].focus_y == pytest.approx(0.10)
+    assert new[0].faces == [[0.1, 0.05, 0.4, 0.15, 0.03]]
     assert new[0].exif_scanned is True
     # New file untouched.
     assert new[1].captured_at is None
@@ -491,8 +489,7 @@ def test_save_and_load_round_trips_gps_and_scanned_flag():
             longitude=-122.0850,
             location="Mountain View, USA",
             description="Sunset over the harbour",
-            focus_x=0.25,
-            focus_y=0.10,
+            faces=[[0.1, 0.05, 0.4, 0.15, 0.03]],
             exif_scanned=True,
             byte_size=4567,
         ),
@@ -510,8 +507,8 @@ def test_save_and_load_round_trips_gps_and_scanned_flag():
     assert out[0].longitude == pytest.approx(-122.0850)
     assert out[0].location == "Mountain View, USA"
     assert out[0].description == "Sunset over the harbour"
-    assert out[0].focus_x == pytest.approx(0.25)
-    assert out[0].focus_y == pytest.approx(0.10)
+    assert out[0].faces == [[0.1, 0.05, 0.4, 0.15, 0.03]]
+    assert out[1].faces is None
     assert out[0].exif_scanned is True
     assert out[0].byte_size == 4567
     # Unscanned item keeps its defaults.

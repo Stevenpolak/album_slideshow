@@ -124,33 +124,129 @@ def test_render_image_contain_adds_letterbox():
     assert result.size == (200, 200)
 
 
-def test_render_image_cover_uses_vertical_face_focus():
+def _hints(*faces, debug=False):
+    return ip.CropHints(faces=tuple(faces), debug=debug)
+
+
+def test_render_image_cover_without_faces_is_centred():
     img = Image.new("RGB", (100, 300), color="green")
     img.paste("red", (0, 0, 100, 100))
-    img.paste("blue", (0, 200, 100, 300))
+    assert ip.render_image(img, "cover", 100, 100).getpixel((50, 50)) == (0, 128, 0)
+    assert ip.render_image(img, "cover", 100, 100, _hints()).getpixel((50, 50)) == (0, 128, 0)
 
-    centred = ip.render_image(img, "cover", 100, 100)
-    focused = ip.render_image(img, "cover", 100, 100, (0.5, 0.1))
 
-    assert centred.getpixel((50, 50)) == (0, 128, 0)
+def test_render_image_cover_keeps_a_face_near_the_top():
+    img = Image.new("RGB", (100, 300), color="green")
+    img.paste("red", (0, 0, 100, 100))
+    face = (0.4, 0.1, 0.6, 0.2, 0.02)
+    focused = ip.render_image(img, "cover", 100, 100, _hints(face))
     assert focused.getpixel((50, 50)) == (255, 0, 0)
 
 
-def test_render_image_cover_uses_horizontal_face_focus():
+def test_render_image_cover_keeps_a_face_near_the_right_edge():
     img = Image.new("RGB", (300, 100), color="green")
-    img.paste("red", (0, 0, 100, 100))
     img.paste("blue", (200, 0, 300, 100))
-
-    focused = ip.render_image(img, "cover", 100, 100, (0.9, 0.5))
-
+    face = (0.8, 0.3, 0.9, 0.6, 0.03)
+    focused = ip.render_image(img, "cover", 100, 100, _hints(face))
     assert focused.getpixel((50, 50)) == (0, 0, 255)
 
 
-def test_render_image_invalid_focus_is_clamped():
-    img = Image.new("RGB", (100, 300), color="green")
-    img.paste("blue", (0, 200, 100, 300))
-    focused = ip.render_image(img, "cover", 100, 100, (2.0, 2.0))
-    assert focused.getpixel((50, 50)) == (0, 0, 255)
+# ── choose_crop_offset (1D: source 1000 px, window 400 px) ─────────────────
+
+def test_crop_two_faces_that_fit_are_both_kept_and_centred():
+    spans = [(300, 400, 1.0), (550, 650, 1.0)]
+    offset = ip.choose_crop_offset(spans, 1000, 400)
+    assert offset <= 300 and offset + 400 >= 650
+    # Group 300..650 centred in the window.
+    assert offset == pytest.approx(275)
+
+
+def test_crop_faces_too_far_apart_keeps_the_biggest_whole():
+    spans = [(50, 150, 1.0), (750, 950, 4.0)]
+    offset = ip.choose_crop_offset(spans, 1000, 400)
+    assert offset <= 750 and offset + 400 >= 950
+    # The smaller face is left fully out rather than cut in half.
+    assert offset >= 150
+
+
+def test_crop_never_centres_between_two_distant_faces():
+    spans = [(50, 150, 1.0), (850, 950, 1.0)]
+    offset = ip.choose_crop_offset(spans, 1000, 400)
+    kept = [a >= offset and b <= offset + 400 for a, b, _w in spans]
+    assert kept.count(True) == 1
+
+
+def test_crop_selected_person_beats_bigger_bystander():
+    selected = (100, 200, 0.01 * 10)
+    bystander = (700, 950, 0.05)
+    offset = ip.choose_crop_offset([selected, bystander], 1000, 400)
+    assert offset <= 100 and offset + 400 >= 200
+
+
+def test_crop_keeps_largest_cluster_in_group_photo():
+    cluster = [(500, 560, 1.0), (600, 660, 1.0), (700, 760, 1.0)]
+    loner = (50, 110, 1.0)
+    offset = ip.choose_crop_offset(cluster + [loner], 1000, 400)
+    assert all(a >= offset and b <= offset + 400 for a, b, _w in cluster)
+
+
+def test_crop_without_faces_or_room_is_centred():
+    assert ip.choose_crop_offset([], 1000, 400) == 300
+    assert ip.choose_crop_offset([(0, 10, 1.0)], 400, 400) == 0
+
+
+def test_face_padding_keeps_the_head_inside():
+    # A face touching y=0.1 would fit unpadded at offset 0.1*H, but the
+    # padding above (hair) must be inside the crop as well.
+    img = Image.new("RGB", (100, 1000))
+    face = (0.4, 0.3, 0.6, 0.4, 0.02)
+    padded = ip._padded_face(face)
+    assert padded[1] == pytest.approx(0.3 - 0.1 * 0.6)
+    statuses = ip._face_statuses((face,), 100, 1000, 0, 240, 100, 200)
+    assert statuses == [ip.FACE_KEPT]
+    statuses = ip._face_statuses((face,), 100, 1000, 0, 300, 100, 200)
+    assert statuses == [ip.FACE_CUT]
+    img.close()
+
+
+# ── debug overlay ────────────────────────────────────────────────────────────
+
+def test_debug_overlay_draws_crosshair_on_source_centre():
+    img = Image.new("RGB", (300, 100), color="black")
+    out = ip.render_image(img, "cover", 100, 100, _hints(debug=True))
+    assert out.size == (100, 100)
+    # Centred crop: the photo's centre is the crop's centre.
+    assert out.getpixel((50, 50)) == ip._CROSSHAIR_COLOR
+
+
+def test_debug_overlay_crosshair_moves_with_the_crop():
+    img = Image.new("RGB", (300, 100), color="black")
+    face = (0.85, 0.4, 0.95, 0.6, 0.02)
+    out = ip.render_image(img, "cover", 100, 100, _hints(face, debug=True))
+    # Crop moved to the right edge, so the source centre (x=150) is gone.
+    assert out.getpixel((50, 50)) != ip._CROSSHAIR_COLOR
+    assert out.size == (100, 100)
+    # ...and an arrow on the left edge points back towards it.
+    assert out.getpixel((1, 50)) == ip._CROSSHAIR_COLOR
+
+
+def test_debug_overlay_is_off_by_default():
+    img = Image.new("RGB", (300, 100), color="black")
+    out = ip.render_image(img, "cover", 100, 100, _hints())
+    assert out.getpixel((50, 50)) == (0, 0, 0)
+
+
+def test_debug_overlay_in_contain_and_blur_keeps_size():
+    img = Image.new("RGB", (300, 100), color="black")
+    for mode in ("contain", "blur"):
+        out = ip.render_image(img, mode, 200, 200, _hints(debug=True))
+        assert out.size == (200, 200)
+        assert out.getpixel((100, 100)) == ip._CROSSHAIR_COLOR
+
+
+def test_face_summary_distinguishes_unknown_from_none():
+    assert ip._face_summary(None, []) == "no face data"
+    assert ip._face_summary((), []).startswith("faces 0")
 
 
 # ── pair_images ──────────────────────────────────────────────────────────────

@@ -127,12 +127,11 @@ class MediaItem:
     # Provider-specific source identifier (e.g. the Immich asset id) used by
     # background enrichment to fetch per-item metadata.
     source_id: str | None = None
-    # Normalised point (0..1 in displayed-image coordinates) that cover-mode
-    # cropping should keep visible. Immich sources populate this from the
-    # detected faces (selected people first); other sources leave it unset
-    # and retain the traditional centred crop.
-    focus_x: float | None = None
-    focus_y: float | None = None
+    # Detected faces as normalised [x1, y1, x2, y2, weight] boxes (0..1 in
+    # displayed-image coordinates). Cover-mode cropping keeps as many whole
+    # faces as fit. None means no face data (non-Immich source, not scanned
+    # yet or the face lookup failed); an empty list means "no faces".
+    faces: list[list[float]] | None = None
     # True once the local-folder EXIF reader has visited this file.
     # Prevents re-reading EXIF on every coordinator refresh and lets the
     # background enrichment task skip already-processed files even after
@@ -994,10 +993,8 @@ def _merge_prior_enrichment(
             item.location = prev.location
         if prev.description and not item.description:
             item.description = prev.description
-        if prev.focus_x is not None and item.focus_x is None:
-            item.focus_x = prev.focus_x
-        if prev.focus_y is not None and item.focus_y is None:
-            item.focus_y = prev.focus_y
+        if prev.faces is not None and item.faces is None:
+            item.faces = prev.faces
         if prev.exif_scanned:
             item.exif_scanned = True
 
@@ -1011,7 +1008,9 @@ class AlbumCoordinator(DataUpdateCoordinator):
     # to query their cached assets once so smart crop starts working.
     # v5: face focus for every Immich source, not only person sources;
     # re-scan so album/favorite/search items pick up their focus.
-    _ITEM_CACHE_VERSION = 5
+    # v6: store every face box instead of one focus point so the crop can
+    # keep whole faces; re-scan to fetch them.
+    _ITEM_CACHE_VERSION = 6
     # Bump independently of the items cache - the geocode cache is
     # keyed by coordinate and is safe to keep across item-shape changes.
     _GEOCODE_CACHE_VERSION = 1
@@ -1224,8 +1223,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     location=raw.get("location"),
                     description=raw.get("description"),
                     source_id=raw.get("source_id"),
-                    focus_x=raw.get("focus_x"),
-                    focus_y=raw.get("focus_y"),
+                    faces=raw.get("faces"),
                     exif_scanned=bool(raw.get("exif_scanned", False)),
                     photo_id=raw.get("photo_id"),
                 ))
@@ -1259,8 +1257,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     "location": it.location,
                     "description": it.description,
                     "source_id": it.source_id,
-                    "focus_x": it.focus_x,
-                    "focus_y": it.focus_y,
+                    "faces": it.faces,
                     "exif_scanned": it.exif_scanned,
                     "photo_id": it.photo_id,
                 }
@@ -2186,7 +2183,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
         return None, {}
 
     async def _enrich_immich_item(self, item: MediaItem) -> None:
-        """Fetch Immich metadata and face-aware crop focus."""
+        """Fetch Immich metadata and the face boxes used for cropping."""
         from . import immich as immich_api
 
         url = self.entry.data.get(CONF_IMMICH_URL)
@@ -2227,9 +2224,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                 faces,
             )
         else:
-            focus = immich_api.parse_face_focus(faces, person_ids)
-            if focus is not None:
-                item.focus_x, item.focus_y = focus
+            item.faces = immich_api.parse_face_boxes(faces, person_ids)
         item.exif_scanned = True
 
     async def _enrich_items_background(self, data: dict[str, Any]) -> None:
