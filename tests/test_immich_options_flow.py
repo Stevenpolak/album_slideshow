@@ -4,6 +4,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from custom_components.album_slideshow import config_flow as cf
 from custom_components.album_slideshow import immich
 from custom_components.album_slideshow.const import (
@@ -98,10 +100,42 @@ def test_picker_is_prefilled_with_current_selection(monkeypatch):
     assert result["step_id"] == "immich_select"
     defaults = _defaults(result)
     assert defaults[CONF_ALBUM_NAME] == "Old"
-    assert defaults["albums"] == ["a1"]  # "gone" no longer exists in Immich
+    assert defaults["albums"] == ["a1", "gone"]
     assert defaults["people"] == ["p1"]
     assert defaults["favorites"] is True
     assert defaults[CONF_IMMICH_FILTER] == '{"city": "Paris"}'
+
+
+@pytest.mark.parametrize("kind", ["albums", "people"])
+@pytest.mark.parametrize("failure", [PermissionError("listing denied"), TimeoutError()])
+def test_failed_listing_keeps_saved_selection(monkeypatch, kind, failure):
+    selection = {"albums": [], "people": [], "favorites": False}
+    selection[kind] = ["a1" if kind == "albums" else "p1"]
+    flow = _flow(
+        monkeypatch,
+        _entry_data(**{CONF_IMMICH_SELECTION_ID: json.dumps(selection)}),
+    )
+
+    async def failed_listing(self):
+        raise failure
+
+    monkeypatch.setattr(FakeClient, f"async_list_{kind}", failed_listing)
+    form = asyncio.run(flow.async_step_init())
+    submitted = form["data_schema"](_defaults(form))
+    asyncio.run(flow.async_step_immich_select(submitted))
+
+    saved = flow.hass.config_entries.updates[0]["data"]
+    assert json.loads(saved[CONF_IMMICH_SELECTION_ID]) == selection
+
+
+def test_missing_choices_are_not_silently_removed(monkeypatch):
+    flow = _flow(monkeypatch, _entry_data())
+    form = asyncio.run(flow.async_step_init())
+    asyncio.run(flow.async_step_immich_select(_defaults(form)))
+
+    saved = flow.hass.config_entries.updates[0]["data"]
+    assert json.loads(saved[CONF_IMMICH_SELECTION_ID])["albums"] == ["a1", "gone"]
+    assert flow._albums["gone"] == "gone (unavailable)"
 
 
 def test_submit_updates_entry_data_and_keeps_credentials(monkeypatch):

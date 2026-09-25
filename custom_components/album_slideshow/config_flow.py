@@ -1474,6 +1474,11 @@ class ImmichOptionsFlow(config_entries.OptionsFlow):
     ) -> FlowResult:
         entry = self.config_entry
         errors: dict[str, str] = {}
+        current = _immich_current_selection(entry.data)
+        for album_id in current["albums"]:
+            self._albums.setdefault(album_id, f"{album_id} (unavailable)")
+        for person_id in current["people"]:
+            self._people.setdefault(person_id, f"{person_id} (unavailable)")
 
         if user_input is not None:
             fields, errors = _parse_immich_select(
@@ -1495,13 +1500,10 @@ class ImmichOptionsFlow(config_entries.OptionsFlow):
                 )
                 return self.async_create_entry(title="", data=dict(entry.options))
 
-        current = _immich_current_selection(entry.data)
         defaults = {
             CONF_ALBUM_NAME: entry.data.get(CONF_ALBUM_NAME) or entry.title,
-            # Drop albums/people that no longer exist so the multi-select
-            # doesn't reject its own defaults.
-            "albums": [a for a in current["albums"] if a in self._albums],
-            "people": [p for p in current["people"] if p in self._people],
+            "albums": current["albums"],
+            "people": current["people"],
             "favorites": current["favorites"],
             CONF_IMMICH_IMAGE_SIZE: entry.data.get(
                 CONF_IMMICH_IMAGE_SIZE, DEFAULT_IMMICH_IMAGE_SIZE
