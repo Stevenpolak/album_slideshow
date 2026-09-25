@@ -194,7 +194,8 @@
           "people": "People",
           "favorites": "Include favorites",
           "immich_filter": "Extra search filter (JSON, optional)",
-          "immich_image_size": "Image quality"
+          "immich_image_size": "Image quality",
+          "reverse_geocode": "Look up EXIF GPS locations via OpenStreetMap"
         }
       },
       "connection": {
@@ -207,6 +208,7 @@
       }
     },
     "error": {
+      "immich_cache_clear_failed": "Could not clear the previous photo source cache. No source settings were changed. Please try again.",
       "immich_cannot_connect": "Could not connect to Immich. Check the URL and API key.",
       "immich_invalid_auth": "Immich rejected the API key. Check that it is valid and that its permissions include server.about, album.read and person.read.",
       "immich_filter_invalid": "The filter must be a valid JSON object. See the README for examples."

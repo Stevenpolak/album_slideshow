@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageOps
 
@@ -15,8 +16,13 @@ FILL_COVER = "cover"
 FILL_CONTAIN = "contain"
 FILL_BLUR = "blur"
 
-# A face box as stored on MediaItem.faces: normalised (x1, y1, x2, y2, weight).
-FaceBox = tuple[float, float, float, float, float]
+class FaceBox(NamedTuple):
+    left: float
+    top: float
+    right: float
+    bottom: float
+    weight: float
+    selected: bool = False
 
 
 @dataclass(frozen=True)
@@ -206,6 +212,32 @@ def pair_images(
     return canvas
 
 
+def render_pair_photo(
+    data: bytes,
+    photo_position: int,
+    portrait_canvas: bool,
+    divider: int,
+    fill_mode: str,
+) -> bytes:
+    """Render one safe photo from an already composed pair without source I/O."""
+    if photo_position not in (0, 1):
+        raise ValueError("Invalid paired-photo position")
+    with open_image(data) as paired:
+        width, height = paired.size
+        length = height if portrait_canvas else width
+        first_length = max(1, (length - divider) // 2)
+        start, end = (
+            (0, first_length) if photo_position == 0
+            else (first_length + divider, length)
+        )
+        if not 0 <= start < end <= length:
+            raise ValueError("Paired photo is outside the rendered canvas")
+        box = (0, start, width, end) if portrait_canvas else (start, 0, end, height)
+        with paired.crop(box) as photo:
+            with render_image(photo, fill_mode, width, height) as rendered:
+                return encode_image(rendered)
+
+
 def encode_image(img: Image.Image) -> bytes:
     """Encode a PIL image to a client-compatible JPEG or PNG.
 
@@ -268,7 +300,7 @@ def _parse_aspect_ratio(ratio: str) -> tuple[int, int]:
 
 
 def _padded_face(face: FaceBox) -> tuple[float, float, float, float]:
-    x1, y1, x2, y2, _weight = face
+    x1, y1, x2, y2 = face[:4]
     fw, fh = x2 - x1, y2 - y1
     return (
         max(0.0, x1 - fw * _FACE_PAD_SIDE),
@@ -289,15 +321,18 @@ def _span_status(a: float, b: float, offset: float, window: float) -> str:
 
 
 def choose_crop_offset(
-    spans: list[tuple[float, float, float]], src_len: float, window: float
+    spans: list[tuple[float, float, float]],
+    src_len: float,
+    window: float,
+    *,
+    selected: list[bool] | None = None,
+    padded_spans: list[tuple[float, float]] | None = None,
 ) -> float:
     """Pick where a crop window of ``window`` px starts along one axis.
 
-    ``spans`` are ``(start, end, weight)`` in source pixels (already padded).
-    The window keeps as much face weight fully inside as possible, counting
-    a cut face worse than a dropped one; among the positions that keep the
-    same faces, it centres on the kept group and prefers not to cut the
-    faces it leaves out. Without faces it returns the centred crop.
+    ``spans`` are unpadded ``(start, end, weight)`` face intervals. Selected
+    people rank ahead of all bystanders. Keep whole faces where possible,
+    retain visible face area otherwise, and use padding as a preference.
     """
     max_offset = max(0.0, src_len - window)
     centred = max_offset / 2
@@ -307,40 +342,56 @@ def choose_crop_offset(
     def clamp(value: float) -> float:
         return max(0.0, min(max_offset, value))
 
-    def score(offset: float) -> float:
-        total = 0.0
-        for a, b, weight in spans:
-            status = _span_status(a, b, offset, window)
-            if status == FACE_KEPT:
-                total += weight
-            elif status == FACE_CUT:
-                total -= _PARTIAL_PENALTY * weight
-        return total
+    priorities = selected if selected is not None else [False] * len(spans)
+    padding = padded_spans if padded_spans is not None else [span[:2] for span in spans]
 
-    candidates = {centred}
-    for a, b, _weight in spans:
-        candidates.add(clamp(a))
-        candidates.add(clamp(b - window))
-    best = max(candidates, key=lambda o: (round(score(o), 9), -abs(o - centred)))
+    def visible_fraction(start: float, end: float, offset: float) -> float:
+        overlap = max(0.0, min(end, offset + window) - max(start, offset))
+        return overlap / (end - start)
+
+    def score(offset: float) -> tuple[float, ...]:
+        tiers = []
+        for priority in (True, False):
+            kept_weight = cut_weight = visible_weight = 0.0
+            for (start, end, weight), is_selected in zip(spans, priorities):
+                if is_selected != priority:
+                    continue
+                state = _span_status(start, end, offset, window)
+                if state == FACE_KEPT:
+                    kept_weight += weight
+                elif state == FACE_CUT:
+                    cut_weight += weight
+                visible_weight += weight * visible_fraction(start, end, offset)
+            tiers.extend((
+                kept_weight,
+                -_PARTIAL_PENALTY * cut_weight if kept_weight else visible_weight,
+            ))
+        tiers.append(sum(
+            span[2] * visible_fraction(start, end, offset)
+            for span, (start, end) in zip(spans, padding)
+        ))
+        return tuple(round(value, 12) for value in tiers)
+
+    candidates = {0.0, centred, max_offset}
+    for start, end in [span[:2] for span in spans] + padding:
+        for offset in (start, end - window, end, start - window, (start + end - window) / 2):
+            candidates.add(clamp(offset))
+    best = max(candidates, key=lambda offset: (score(offset), -abs(offset - centred), -offset))
 
     kept = [
-        (a, b) for a, b, _w in spans if _span_status(a, b, best, window) == FACE_KEPT
+        index for index, (start, end, _weight) in enumerate(spans)
+        if _span_status(start, end, best, window) == FACE_KEPT
     ]
     if not kept:
         return best
-    # Every offset in [lo, hi] keeps the same group fully inside; pick the
-    # best-scoring one there, preferring the one that centres the group.
-    group_a = min(a for a, _b in kept)
-    group_b = max(b for _a, b in kept)
-    lo = clamp(group_b - window)
-    hi = clamp(group_a)
-    target = clamp((group_a + group_b) / 2 - window / 2)
-    options = {max(lo, min(hi, target))}
-    for a, b, _weight in spans:
-        for edge in (b, a - window):
-            if lo <= edge <= hi:
-                options.add(edge)
-    return max(options, key=lambda o: (round(score(o), 9), -abs(o - target)))
+    group_start = min(padding[index][0] for index in kept)
+    group_end = max(padding[index][1] for index in kept)
+    if group_end - group_start > window:
+        group_start = min(spans[index][0] for index in kept)
+        group_end = max(spans[index][1] for index in kept)
+    target = clamp((group_start + group_end - window) / 2)
+    candidates.add(target)
+    return max(candidates, key=lambda offset: (score(offset), -abs(offset - target), -offset))
 
 
 def _face_statuses(
@@ -354,7 +405,7 @@ def _face_statuses(
 ) -> list[str]:
     statuses = []
     for face in faces:
-        px1, py1, px2, py2 = _padded_face(face)
+        px1, py1, px2, py2 = face[:4]
         x = _span_status(px1 * new_w, px2 * new_w, left, target_w)
         y = _span_status(py1 * new_h, py2 * new_h, top, target_h)
         if FACE_DROPPED in (x, y):
@@ -381,17 +432,21 @@ def _resize_cover(
     new_h = max(1, int(round(src_h * scale)))
     resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-    faces = hints.faces or ()
+    faces = tuple(FaceBox(*face) for face in hints.faces or ())
     padded = [_padded_face(face) for face in faces]
     left = choose_crop_offset(
-        [(p[0] * new_w, p[2] * new_w, f[4]) for p, f in zip(padded, faces)],
+        [(face.left * new_w, face.right * new_w, face.weight) for face in faces],
         new_w,
         target_w,
+        selected=[face.selected for face in faces],
+        padded_spans=[(box[0] * new_w, box[2] * new_w) for box in padded],
     )
     top = choose_crop_offset(
-        [(p[1] * new_h, p[3] * new_h, f[4]) for p, f in zip(padded, faces)],
+        [(face.top * new_h, face.bottom * new_h, face.weight) for face in faces],
         new_h,
         target_h,
+        selected=[face.selected for face in faces],
+        padded_spans=[(box[1] * new_h, box[3] * new_h) for box in padded],
     )
     left = max(0, min(max(0, new_w - target_w), int(round(left))))
     top = max(0, min(max(0, new_h - target_h), int(round(top))))
@@ -442,7 +497,7 @@ def _draw_debug_marks(
     line = max(2, round(min(w, h) / 200))
     for face, status in zip(faces, statuses):
         color = _DEBUG_COLORS[status]
-        x1, y1, x2, y2, _weight = face
+        x1, y1, x2, y2 = face[:4]
         draw.rectangle((x1 * w, y1 * h, x2 * w, y2 * h), outline=color, width=line)
         px1, py1, px2, py2 = _padded_face(face)
         draw.rectangle(

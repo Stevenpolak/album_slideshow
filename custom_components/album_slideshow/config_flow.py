@@ -1493,12 +1493,27 @@ class ImmichOptionsFlow(config_entries.OptionsFlow):
                 }
                 if not new_data[CONF_IMMICH_FILTER]:
                     new_data.pop(CONF_IMMICH_FILTER)
-                if _immich_source_changed(entry.data, new_data):
-                    await _async_clear_item_cache(self.hass, entry.entry_id)
-                self.hass.config_entries.async_update_entry(
-                    entry, data=new_data, title=fields[CONF_ALBUM_NAME]
-                )
-                return self.async_create_entry(title="", data=dict(entry.options))
+                try:
+                    if _immich_source_changed(entry.data, new_data):
+                        await _async_clear_item_cache(self.hass, entry.entry_id)
+                except Exception as err:
+                    _LOGGER.warning(
+                        "Could not clear Immich source cache for %s (%s)",
+                        entry.entry_id, type(err).__name__,
+                    )
+                    errors["base"] = "immich_cache_clear_failed"
+                else:
+                    options = {
+                        **entry.options,
+                        CONF_REVERSE_GEOCODE: user_input.get(
+                            CONF_REVERSE_GEOCODE,
+                            entry.options.get(CONF_REVERSE_GEOCODE, DEFAULT_REVERSE_GEOCODE),
+                        ),
+                    }
+                    self.hass.config_entries.async_update_entry(
+                        entry, data=new_data, title=fields[CONF_ALBUM_NAME], options=options
+                    )
+                    return self.async_create_entry(title="", data=options)
 
         defaults = {
             CONF_ALBUM_NAME: entry.data.get(CONF_ALBUM_NAME) or entry.title,
@@ -1511,9 +1526,14 @@ class ImmichOptionsFlow(config_entries.OptionsFlow):
         }
         if entry.data.get(CONF_IMMICH_FILTER):
             defaults[CONF_IMMICH_FILTER] = entry.data[CONF_IMMICH_FILTER]
+        schema = _immich_select_schema(self._albums, self._people, defaults).extend({
+            vol.Required(CONF_REVERSE_GEOCODE, default=bool(entry.options.get(
+                CONF_REVERSE_GEOCODE, DEFAULT_REVERSE_GEOCODE,
+            ))): bool,
+        })
         return self.async_show_form(
             step_id="immich_select",
-            data_schema=_immich_select_schema(self._albums, self._people, defaults),
+            data_schema=schema,
             errors=errors,
         )
 
@@ -1522,6 +1542,7 @@ def _immich_source_changed(old: dict[str, Any], new: dict[str, Any]) -> bool:
     """True when the set of photos an Immich entry shows may have changed."""
     keys = (
         CONF_IMMICH_URL,
+        CONF_IMMICH_API_KEY,
         CONF_IMMICH_SELECTION_TYPE,
         CONF_IMMICH_SELECTION_ID,
         CONF_IMMICH_FILTER,
@@ -1539,10 +1560,7 @@ async def _async_clear_item_cache(hass: Any, entry_id: str) -> None:
     """
     from homeassistant.helpers.storage import Store
 
-    try:
-        await Store(hass, 1, f"{DOMAIN}.{entry_id}.items").async_remove()
-    except Exception as err:  # noqa: BLE001 - best effort
-        _LOGGER.debug("Could not clear item cache for %s: %s", entry_id, err)
+    await Store(hass, 1, f"{DOMAIN}.{entry_id}.items").async_remove()
 
 
 class _NoOptionsFlow(config_entries.OptionsFlow):

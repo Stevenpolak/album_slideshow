@@ -431,6 +431,7 @@ def test_merge_prior_enrichment_carries_metadata_by_url():
             description="A caption",
             faces=[[0.1, 0.05, 0.4, 0.15, 0.03]],
             exif_scanned=True,
+            face_scanned=True,
         )
     ]
     new = [_item("file:///a.jpg"), _item("file:///b.jpg")]
@@ -441,9 +442,11 @@ def test_merge_prior_enrichment_carries_metadata_by_url():
     assert new[0].description == "A caption"
     assert new[0].faces == [[0.1, 0.05, 0.4, 0.15, 0.03]]
     assert new[0].exif_scanned is True
+    assert new[0].face_scanned is True
     # New file untouched.
     assert new[1].captured_at is None
     assert new[1].exif_scanned is False
+    assert new[1].face_scanned is False
 
 
 def test_merge_prior_enrichment_does_not_overwrite_fresh_values():
@@ -491,6 +494,7 @@ def test_save_and_load_round_trips_gps_and_scanned_flag():
             description="Sunset over the harbour",
             faces=[[0.1, 0.05, 0.4, 0.15, 0.03]],
             exif_scanned=True,
+            face_scanned=True,
             byte_size=4567,
         ),
         _item("file:///unscanned.jpg"),
@@ -510,10 +514,23 @@ def test_save_and_load_round_trips_gps_and_scanned_flag():
     assert out[0].faces == [[0.1, 0.05, 0.4, 0.15, 0.03]]
     assert out[1].faces is None
     assert out[0].exif_scanned is True
+    assert out[0].face_scanned is True
     assert out[0].byte_size == 4567
     # Unscanned item keeps its defaults.
     assert out[1].latitude is None
     assert out[1].exif_scanned is False
+    assert out[1].face_scanned is False
+
+
+def test_cache_from_previous_immich_source_is_not_used_after_reconfiguration():
+    coord = _stub_coordinator()
+    coord._immich_cache_source = "old-source"
+    asyncio.run(coord._save_cached_items({"items": [_item("https://example.test/old.jpg")]}))
+    assert asyncio.run(coord._load_cached_items()) is not None
+
+    coord._immich_cache_source = "new-source"
+
+    assert asyncio.run(coord._load_cached_items()) is None
 
 
 # ── geocode opt-out via entry.options ─────────────────────────────────────

@@ -26,7 +26,7 @@ custom_components/album_slideshow/
 ├── number.py          # Number entities (slide interval, refresh hours)
 ├── select.py          # Select entities (fill mode, orientation, order, aspect ratio)
 ├── sensor.py          # Sensor entities (photo count, album title)
-├── store.py           # In-memory settings store
+├── store.py           # Runtime settings and persisted photo exclusions
 ├── services.yaml      # Service definitions
 ├── strings.json       # UI strings
 ├── translations/      # Localisation files

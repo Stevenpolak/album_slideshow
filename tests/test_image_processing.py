@@ -125,7 +125,7 @@ def test_render_image_contain_adds_letterbox():
 
 
 def _hints(*faces, debug=False):
-    return ip.CropHints(faces=tuple(faces), debug=debug)
+    return ip.CropHints(faces=tuple(ip.FaceBox(*face) for face in faces), debug=debug)
 
 
 def test_render_image_cover_without_faces_is_centred():
@@ -176,10 +176,13 @@ def test_crop_never_centres_between_two_distant_faces():
     assert kept.count(True) == 1
 
 
-def test_crop_selected_person_beats_bigger_bystander():
-    selected = (100, 200, 0.01 * 10)
-    bystander = (700, 950, 0.05)
-    offset = ip.choose_crop_offset([selected, bystander], 1000, 400)
+@pytest.mark.parametrize("bystander_weight", [0.05, 0.5, 100.0])
+def test_crop_selected_person_beats_bigger_bystander(bystander_weight):
+    selected = (100, 200, 0.001)
+    bystander = (700, 950, bystander_weight)
+    offset = ip.choose_crop_offset(
+        [selected, bystander], 1000, 400, selected=[True, False]
+    )
     assert offset <= 100 and offset + 400 >= 200
 
 
@@ -204,9 +207,56 @@ def test_face_padding_keeps_the_head_inside():
     assert padded[1] == pytest.approx(0.3 - 0.1 * 0.6)
     statuses = ip._face_statuses((face,), 100, 1000, 0, 240, 100, 200)
     assert statuses == [ip.FACE_KEPT]
-    statuses = ip._face_statuses((face,), 100, 1000, 0, 300, 100, 200)
+    statuses = ip._face_statuses((face,), 100, 1000, 0, 350, 100, 200)
     assert statuses == [ip.FACE_CUT]
     img.close()
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_padding_never_discards_a_face_that_fits(selected):
+    face = (0.35, 0.10, 0.65, 0.275, 0.0525, selected)
+    with Image.new("RGB", (1000, 2000), "black") as image:
+        image.paste("red", (350, 200, 650, 550))
+        with ip.render_image(image, "cover", 1000, 562, _hints(face)) as cropped:
+            assert cropped.getbbox() is not None
+            assert sum(count for count, color in cropped.getcolors() if color == (255, 0, 0)) == 300 * 350
+
+
+def test_oversized_face_keeps_visible_area_instead_of_background():
+    offset = ip.choose_crop_offset([(50, 650, 1.0)], 2000, 400)
+    assert min(650, offset + 400) - max(50, offset) == pytest.approx(400)
+
+
+def test_oversized_selected_face_stays_ahead_of_whole_bystander():
+    offset = ip.choose_crop_offset(
+        [(50, 650, 0.01), (1400, 1500, 1.0)], 2000, 400,
+        selected=[True, False],
+    )
+    assert min(650, offset + 400) - max(50, offset) == pytest.approx(400)
+
+
+def test_selected_face_priority_survives_metadata_and_camera_conversion():
+    from custom_components.album_slideshow import camera, immich
+
+    faces = [
+        {"imageWidth": 1000, "imageHeight": 400,
+         "boundingBoxX1": 100, "boundingBoxY1": 100,
+         "boundingBoxX2": 150, "boundingBoxY2": 150, "person": {"id": "selected"}},
+        {"imageWidth": 1000, "imageHeight": 400,
+         "boundingBoxX1": 700, "boundingBoxY1": 100,
+         "boundingBoxX2": 900, "boundingBoxY2": 250, "person": {"id": "bystander"}},
+    ]
+    item = MediaItem(
+        url="test", width=1000, height=400, mime_type=None, filename=None,
+        faces=immich.parse_face_boxes(faces, {"selected"}),
+    )
+    hints = ip.CropHints(faces=camera._item_faces(item))
+    with Image.new("RGB", (1000, 400), "black") as image:
+        image.paste("red", (100, 100, 150, 150))
+        image.paste("blue", (700, 100, 900, 250))
+        with ip.render_image(image, "cover", 400, 400, hints) as cropped:
+            assert cropped.getextrema()[0][1] == 255
+            assert cropped.getextrema()[2][1] == 0
 
 
 # ── debug overlay ────────────────────────────────────────────────────────────
@@ -295,6 +345,52 @@ def test_pair_images_transparent_divider_rgba():
         transparent_divider=True,
     )
     assert result.mode == "RGBA"
+
+
+@pytest.mark.parametrize("portrait_canvas", [False, True])
+@pytest.mark.parametrize("photo_position", [0, 1])
+@pytest.mark.parametrize("fill_mode", ["cover", "contain", "blur"])
+@pytest.mark.parametrize("divider, transparent", [(0, False), (8, False), (8, True)])
+def test_render_pair_photo_keeps_only_selected_half(
+    monkeypatch, portrait_canvas, photo_position, fill_mode, divider, transparent
+):
+    size = (90, 160) if portrait_canvas else (160, 90)
+    with Image.new("RGB", (100, 100), (240, 0, 0)) as first:
+        with Image.new("RGB", (100, 100), (0, 0, 240)) as second:
+            with ip.pair_images(
+                first, second, *size, fill_mode, portrait_canvas, divider,
+                (0, 0, 0, 0) if transparent else (255, 255, 255), transparent,
+            ) as paired:
+                data = ip.encode_image(paired)
+    length = size[1] if portrait_canvas else size[0]
+    first_length = (length - divider) // 2
+    start, end = (0, first_length) if photo_position == 0 else (first_length + divider, length)
+    box = (0, start, size[0], end) if portrait_canvas else (start, 0, end, size[1])
+    with ip.open_image(data) as paired:
+        with paired.crop(box) as expected:
+            expected_input = (expected.size, expected.tobytes())
+    rendered_inputs = []
+    original_render = ip.render_image
+
+    def render_selected(photo, mode, width, height):
+        rendered_inputs.append((photo.size, photo.tobytes()))
+        return original_render(photo, mode, width, height)
+
+    monkeypatch.setattr(ip, "render_image", render_selected)
+    result = ip.render_pair_photo(data, photo_position, portrait_canvas, divider, fill_mode)
+    assert rendered_inputs == [expected_input]
+    with ip.open_image(result) as rendered:
+        assert rendered.size == size
+        center = rendered.getpixel((size[0] // 2, size[1] // 2))
+        selected_channel = 0 if photo_position == 0 else 2
+        other_channel = 2 if photo_position == 0 else 0
+        assert center[selected_channel] > 220
+        assert center[other_channel] < 15
+
+
+def test_render_pair_photo_rejects_invalid_position():
+    with pytest.raises(ValueError, match="position"):
+        ip.render_pair_photo(_make_jpeg(100, 50), 2, False, 8, "contain")
 
 
 # ── encode_image ─────────────────────────────────────────────────────────────

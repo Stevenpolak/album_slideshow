@@ -533,6 +533,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         domain_data = hass.data.get(DOMAIN, {})
+        coordinator = domain_data.get(entry.entry_id, {}).get("coordinator")
+        if coordinator is not None:
+            await coordinator._cancel_enrichment()
         domain_data.pop(entry.entry_id, None)
         # Drop the shared semaphore once the last album is gone so it's
         # re-created if the integration is re-added later.

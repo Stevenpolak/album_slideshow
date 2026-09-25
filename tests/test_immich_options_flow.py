@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,6 +18,7 @@ from custom_components.album_slideshow.const import (
     CONF_IMMICH_SELECTION_TYPE,
     CONF_IMMICH_URL,
     CONF_PROVIDER,
+    CONF_REVERSE_GEOCODE,
     PROVIDER_IMMICH,
 )
 
@@ -136,6 +138,39 @@ def test_missing_choices_are_not_silently_removed(monkeypatch):
     saved = flow.hass.config_entries.updates[0]["data"]
     assert json.loads(saved[CONF_IMMICH_SELECTION_ID])["albums"] == ["a1", "gone"]
     assert flow._albums["gone"] == "gone (unavailable)"
+
+
+def test_reverse_geocoding_option_remains_editable(monkeypatch):
+    flow = _flow(monkeypatch, _entry_data())
+    flow.config_entry.options = {CONF_REVERSE_GEOCODE: False, "other": "kept"}
+    form = asyncio.run(flow.async_step_init())
+    values = _defaults(form)
+    assert values[CONF_REVERSE_GEOCODE] is False
+    values[CONF_REVERSE_GEOCODE] = True
+
+    result = asyncio.run(flow.async_step_immich_select(values))
+
+    assert result["data"] == {CONF_REVERSE_GEOCODE: True, "other": "kept"}
+    assert flow.hass.config_entries.updates[0]["options"] == result["data"]
+
+
+def test_cache_clear_failure_does_not_change_source(monkeypatch):
+    flow = _flow(monkeypatch, _entry_data())
+    asyncio.run(flow.async_step_init())
+    monkeypatch.setattr(cf, "_async_clear_item_cache", AsyncMock(side_effect=OSError()))
+
+    result = asyncio.run(flow.async_step_immich_select({
+        CONF_ALBUM_NAME: "Different", "albums": ["a2"],
+    }))
+
+    assert result["errors"] == {"base": "immich_cache_clear_failed"}
+    assert flow.hass.config_entries.updates == []
+
+
+def test_changing_api_key_invalidates_old_source_cache():
+    original = _entry_data()
+    changed = {**original, CONF_IMMICH_API_KEY: "different-user-key"}
+    assert cf._immich_source_changed(original, changed)
 
 
 def test_submit_updates_entry_data_and_keeps_credentials(monkeypatch):
